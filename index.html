@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PetHealth Daily</title>
-    <!-- Tailwind CDN 警告不影响渲染，仅用于演示 -->
+    <!-- Tailwind 警告仅供参考，不影响渲染 -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -17,7 +17,6 @@
       #root {
         min-height: 100vh;
       }
-      /* 隐藏百度地图水印 */
       .BMap_cpyCtrl, .anchorBL {
         display: none !important;
       }
@@ -28,14 +27,13 @@
     "react": "https://esm.sh/react@19.0.0",
     "react-dom": "https://esm.sh/react-dom@19.0.0",
     "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
-    "@google/genai": "https://esm.sh/@google/genai@1.3.2",
+    "@google/genai": "https://esm.sh/@google/genai@0.21.0",
     "xlsx": "https://esm.sh/xlsx@0.18.5",
     "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
     "react/": "https://esm.sh/react@^19.2.4/"
   }
 }
 </script>
-    <!-- 百度地图脚本 -->
     <script 
       type="text/javascript" 
       src="https://api.map.baidu.com/api?type=webgl&v=1.0&ak=jS2HDcZPBaL4ysCwS89bjI4glM6N4gVM"
@@ -43,7 +41,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <!-- 引入主入口文件 -->
     <script type="module" src="index.tsx"></script>
   </body>
 </html>
