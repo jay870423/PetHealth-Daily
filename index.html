@@ -16,7 +16,7 @@
       #root {
         min-height: 100vh;
       }
-      /* 隐藏百度地图水印，提升 UI 纯净度 */
+      /* 隐藏百度地图水印 */
       .BMap_cpyCtrl, .anchorBL {
         display: none !important;
       }
@@ -34,23 +34,20 @@
   }
 }
 </script>
-    <!-- 百度地图脚本，增加 crossorigin 和 referrerpolicy 以缓解 Script error 和 Referer 鉴权问题 -->
+    <!-- 百度地图脚本：移除 crossorigin 属性以修复脚本加载权限导致的 Script error -->
     <script 
       type="text/javascript" 
       src="https://api.map.baidu.com/api?type=webgl&v=1.0&ak=jS2HDcZPBaL4ysCwS89bjI4glM6N4gVM"
-      crossorigin="anonymous"
-      referrerpolicy="no-referrer-when-downgrade"
     ></script>
-</head>
+  </head>
   <body>
     <div id="root"></div>
+    <!-- 必须显式引入 index.tsx 模块 -->
+    <script type="module" src="index.tsx"></script>
     <script>
-      // 全局错误捕获，尝试识别具体的 Script error 原因
       window.onerror = function(message, source, lineno, colno, error) {
         if (message === 'Script error.') {
-          console.error('检测到 Script error: 可能是第三方脚本(百度地图)加载受限或 ESM.sh 资源跨域失败。请检查百度地图 AK 白名单配置。');
-        } else {
-          console.error('应用异常:', message, '文件:', source, '行:', lineno);
+          console.warn('捕获到外部脚本限制。如果地图无法显示，请检查百度地图 AK 的域名白名单。');
         }
       };
     </script>
