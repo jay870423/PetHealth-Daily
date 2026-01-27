@@ -1,0 +1,7 @@
+{
+  "name": "PetHealth Daily Dashboard",
+  "description": "An Apple Health-inspired pet monitoring dashboard featuring activity tracking, health metrics, interactive footprint maps, and AI-powered health summaries.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
