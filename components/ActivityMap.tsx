@@ -17,129 +17,124 @@ const ActivityMap: React.FC<ActivityMapProps> = ({ coordinates }) => {
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 1. 初始化地图引擎
   useEffect(() => {
     let checkInterval: any;
+    let timeoutCounter = 0;
+    const MAX_RETRIES = 50; // 200ms * 50 = 10秒超时
 
     const initMap = () => {
       if (!mapContainerRef.current) return;
-      if (!window.BMapGL) return;
+      if (!window.BMapGL) {
+        console.warn("BMapGL 引擎尚未就绪");
+        return;
+      }
 
       try {
         if (mapRef.current) return; // 避免重复初始化
 
         const map = new window.BMapGL.Map(mapContainerRef.current, {
           enableIconClick: false,
-          displayOptions: {
-            poi: true,
-            building: true
-          }
+          displayOptions: { poi: true, building: true }
         });
 
-        // 默认显示北京或上海中心，直到数据加载
+        // 默认中心点：上海
         const defaultPoint = new window.BMapGL.Point(121.4737, 31.2304);
         map.centerAndZoom(defaultPoint, 15);
         map.enableScrollWheelZoom(true);
         
-        // 强制触发布局计算，解决容器初始化高度为 0 的问题
+        // 延迟触发布局更新，确保容器尺寸正确
         setTimeout(() => {
-          if (map) map.resize();
-        }, 300);
+          if (map && typeof map.resize === 'function') {
+            map.resize();
+          }
+        }, 500);
 
         mapRef.current = map;
         setIsReady(true);
-        console.log("Baidu Map GL Engine Ready.");
       } catch (err) {
-        console.error("Baidu Map Init Error:", err);
-        setError("地图引擎启动失败");
+        console.error("地图初始化失败:", err);
+        setError("地图渲染异常。请确认百度地图 AK 已在后台开启 Referer 白名单限制。");
       }
     };
 
     checkInterval = setInterval(() => {
+      timeoutCounter++;
       if (window.BMapGL) {
         clearInterval(checkInterval);
         initMap();
+      } else if (timeoutCounter > MAX_RETRIES) {
+        clearInterval(checkInterval);
+        setError("百度地图服务加载超时。请检查网络或 AK 配置。");
+        console.error("Baidu Map script load timeout.");
       }
-    }, 100);
+    }, 200);
 
     return () => {
       if (checkInterval) clearInterval(checkInterval);
       if (mapRef.current) {
-        mapRef.current.destroy();
+        try {
+          if (typeof mapRef.current.destroy === 'function') {
+            mapRef.current.destroy();
+          }
+        } catch (e) {
+          console.warn("地图卸载警告:", e);
+        }
         mapRef.current = null;
       }
     };
   }, []);
 
-  // 2. 渲染轨迹数据
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isReady || !coordinates || coordinates.length === 0) return;
 
     try {
-      // 过滤无效坐标 (0,0) 并转换为百度点位
-      const points = coordinates
-        .filter(coord => coord[0] !== 0 && coord[1] !== 0)
+      // 严格过滤无效坐标
+      const validPoints = coordinates
+        .filter(c => Array.isArray(c) && c.length >= 2 && !isNaN(c[0]) && !isNaN(c[1]) && c[0] !== 0)
         .map(coord => new window.BMapGL.Point(coord[1], coord[0]));
 
-      if (points.length === 0) return;
+      if (validPoints.length === 0) return;
 
       map.clearOverlays();
 
-      // 绘制平滑轨迹
-      const polyline = new window.BMapGL.Polyline(points, {
-        strokeColor: "#3b82f6", // 典型的健康应用蓝色
+      // 绘制轨迹
+      const polyline = new window.BMapGL.Polyline(validPoints, {
+        strokeColor: "#3b82f6",
         strokeWeight: 6,
-        strokeOpacity: 0.9,
-        strokeLineJoin: 'round',
-        enableClicking: false
+        strokeOpacity: 0.8,
+        strokeLineJoin: 'round'
       });
       map.addOverlay(polyline);
 
-      // 起点标记
-      const startLabel = new window.BMapGL.Label("轨迹起点", {
-        position: points[0],
-        offset: new window.BMapGL.Size(-20, -30)
-      });
-      startLabel.setStyle({
-        color: "#10b981",
-        fontSize: "10px",
-        fontWeight: "bold",
-        border: "1px solid #10b981",
-        padding: "2px 4px",
-        borderRadius: "4px",
-        backgroundColor: "rgba(255,255,255,0.9)"
-      });
-      map.addOverlay(startLabel);
-
-      // 当前位置 (终点) 标记
-      const lastPoint = points[points.length - 1];
+      // 绘制终点标记
+      const lastPoint = validPoints[validPoints.length - 1];
       const marker = new window.BMapGL.Marker(lastPoint);
       map.addOverlay(marker);
 
-      // 自动调整视野，确保轨迹完整显示
-      map.setViewport(points, { 
-        margins: [80, 80, 80, 80],
-        zoomFactor: -1 // 留出更多边距
-      });
-
+      // 调整视野
+      map.setViewport(validPoints, { margins: [60, 60, 60, 60] });
     } catch (err) {
-      console.error("Overlay update failed:", err);
+      console.warn("更新地图覆盖物失败:", err);
     }
   }, [coordinates, isReady]);
 
   return (
     <div className="relative w-full h-full bg-[#f8f9fa] overflow-hidden">
       {!isReady && !error && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white">
-          <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-          <p className="mt-3 text-[10px] text-gray-400 font-bold uppercase tracking-widest">定位中...</p>
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/80 backdrop-blur-sm">
+          <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="mt-4 text-[10px] text-gray-500 font-bold tracking-widest uppercase animate-pulse">正在连接宠物卫星...</p>
         </div>
       )}
       
       {error && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-red-50 text-red-500 p-4 text-center">
-          <p className="text-xs font-bold">{error}</p>
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-red-50 text-red-500 p-6 text-center">
+          <svg className="w-10 h-10 mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <p className="text-xs font-bold leading-relaxed">{error}</p>
+          <button onClick={() => window.location.reload()} className="mt-4 text-[10px] bg-red-100 px-3 py-1 rounded-full font-black uppercase">重试</button>
         </div>
       )}
 
