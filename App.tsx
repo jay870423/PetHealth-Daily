@@ -175,11 +175,11 @@ const App: React.FC = () => {
                     </p>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">大气压</p>
+                    <p className="text-xs text-gray-500 font-medium">气压</p>
                     <p className="text-3xl font-bold text-gray-900">{report.vitals.avgPressure}<span className="text-xs font-normal text-gray-400 ml-1">hPa</span></p>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">平均高度</p>
+                    <p className="text-xs text-gray-500 font-medium">当前海拔</p>
                     <p className="text-3xl font-bold text-gray-900">{report.vitals.avgHeight}<span className="text-xs font-normal text-gray-400 ml-1">m</span></p>
                   </div>
                   <div className="space-y-1">
@@ -201,10 +201,18 @@ const App: React.FC = () => {
 
             <section className="space-y-4">
               <div className="flex items-center justify-between px-2">
-                <h2 className="text-lg font-bold text-gray-800">全天轨迹图谱</h2>
-                <div className="bg-blue-50 text-blue-600 text-[10px] font-black px-2 py-1 rounded-md tracking-tighter uppercase">Satellite View</div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800">全天轨迹图谱</h2>
+                  <p className="text-xs text-gray-400">基于 GPS 与 LBS 混合定位生成的足迹</p>
+                </div>
+                <div className="flex items-center gap-2">
+                   <div className="bg-white/80 border border-gray-100 text-gray-500 text-[10px] font-bold px-2 py-1 rounded-lg">
+                      {report.coordinates.length} 采集点
+                   </div>
+                   <div className="bg-indigo-50 text-indigo-600 text-[10px] font-black px-2 py-1 rounded-lg tracking-widest uppercase">Precision GL</div>
+                </div>
               </div>
-              <div className="h-[400px] w-full bg-white rounded-[2.5rem] overflow-hidden shadow-sm border border-gray-100">
+              <div className="h-[450px] w-full bg-white rounded-[2.5rem] overflow-hidden shadow-xl shadow-gray-200/50 border border-gray-100 relative">
                 <ActivityMap coordinates={report.coordinates} />
               </div>
             </section>
