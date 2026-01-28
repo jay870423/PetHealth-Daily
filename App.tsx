@@ -30,19 +30,12 @@ const App: React.FC = () => {
     setDbStatus('syncing');
     setLastError(null);
     try {
+      // 使用绝对或相对路径
       const response = await fetch(`/api/telemetry?petId=${petId}`);
-      const rawText = await response.text();
-      
-      let data;
-      try {
-        data = JSON.parse(rawText);
-      } catch (e) {
-        // 如果无法解析 JSON，说明是服务器返回的 HTML 404/500 页面
-        throw new Error(`[HTTP ${response.status}] 服务器未返回 JSON。内容摘要: ${rawText.slice(0, 100)}`);
-      }
+      const data = await response.json();
       
       if (!response.ok) {
-        throw new Error(data.error || `请求失败 (${response.status})`);
+        throw new Error(`${data.error || '连接失败'}: ${data.details || ''}`);
       }
 
       if (data._empty) {
@@ -59,6 +52,7 @@ const App: React.FC = () => {
       console.error("Fetch Detail Error:", err);
       setDbStatus('error');
       setLastError(err.message);
+      // 失败后使用 Mock 数据兜底，确保 UI 不空白
       const { generateDailyReport } = await import('./services/mockData');
       setReport(generateDailyReport(petId));
     } finally {
@@ -68,7 +62,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     fetchReport(selectedPetId);
-    const interval = setInterval(() => fetchReport(selectedPetId), 300000);
+    const interval = setInterval(() => fetchReport(selectedPetId), 60000); // 1分钟轮询一次
     return () => clearInterval(interval);
   }, [selectedPetId]);
 
@@ -103,7 +97,7 @@ const App: React.FC = () => {
                       dbStatus === 'connected' ? 'bg-green-500' : dbStatus === 'syncing' ? 'bg-blue-500 animate-pulse' : 'bg-red-500'
                     }`}></div>
                     <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">
-                      {dbStatus === 'connected' ? 'InfluxDB Live' : dbStatus === 'syncing' ? 'Syncing' : 'Mock Mode'}
+                      {dbStatus === 'connected' ? 'InfluxDB Live' : dbStatus === 'syncing' ? 'Syncing' : 'Mode: Failover'}
                     </span>
                   </div>
                 </div>
@@ -148,17 +142,17 @@ const App: React.FC = () => {
       <div className={`max-w-4xl mx-auto px-4 md:px-8 space-y-6 transition-all duration-500 ${loading ? 'opacity-50 blur-[2px]' : 'opacity-100 blur-0'}`}>
         
         {(dbStatus === 'error' || (dbStatus === 'connected' && lastError)) && (
-          <div className={`${dbStatus === 'error' ? 'bg-red-50 border-red-100' : 'bg-blue-50 border-blue-100'} border rounded-2xl p-4 flex items-center gap-3 animate-in slide-in-from-top-4`}>
-            <div className={`${dbStatus === 'error' ? 'bg-red-100' : 'bg-blue-100'} p-2 rounded-xl`}>
+          <div className={`${dbStatus === 'error' ? 'bg-red-50 border-red-100 shadow-sm' : 'bg-blue-50 border-blue-100'} border rounded-2xl p-4 flex items-center gap-3 animate-in slide-in-from-top-4`}>
+            <div className={`${dbStatus === 'error' ? 'bg-red-100' : 'bg-blue-100'} p-2 rounded-xl flex-shrink-0`}>
               <svg className={`w-5 h-5 ${dbStatus === 'error' ? 'text-red-600' : 'text-blue-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
             <div className="flex-1 overflow-hidden">
               <p className={`text-xs font-bold ${dbStatus === 'error' ? 'text-red-800' : 'text-blue-800'}`}>
-                {dbStatus === 'error' ? '实时数据连接异常' : '数据状态提示'}
+                {dbStatus === 'error' ? '数据同步异常' : '数据状态'}
               </p>
-              <div className={`text-[10px] break-all font-mono mt-1 ${dbStatus === 'error' ? 'text-red-500' : 'text-blue-500'}`}>
+              <div className={`text-[10px] break-all font-mono mt-0.5 ${dbStatus === 'error' ? 'text-red-500' : 'text-blue-500'}`}>
                 {lastError}
               </div>
             </div>
@@ -170,7 +164,7 @@ const App: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-transparent hover:border-blue-100 transition-all">
                 <div className="flex justify-between items-start mb-6">
-                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">今日活动 ({dbStatus === 'connected' && !lastError?.includes('暂无') ? 'InfluxDB' : 'Mock'})</h2>
+                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">今日活动 (STEPS)</h2>
                   <span className={`text-[10px] px-2.5 py-1 rounded-lg font-bold ${
                     report.activity.activeLevel === 'HIGH' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'
                   }`}>
@@ -186,7 +180,7 @@ const App: React.FC = () => {
                 report.vitals.status === 'WARNING' ? 'bg-orange-50 border-orange-200 shadow-orange-100' : 'bg-white border-transparent'
               }`}>
                 <div className="flex justify-between items-start mb-8">
-                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">实时体征 (SENSORS)</h2>
+                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">实时体征 (VITALS)</h2>
                   <div className={`px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 ${
                     report.vitals.status === 'WARNING' ? 'bg-orange-500 text-white' : 'bg-green-100 text-green-600'
                   }`}>
@@ -195,20 +189,20 @@ const App: React.FC = () => {
                 </div>
                 <div className="grid grid-cols-2 gap-6">
                   <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">传感器体温</p>
+                    <p className="text-xs text-gray-500 font-medium">体温</p>
                     <p className={`text-3xl font-bold ${report.vitals.status === 'WARNING' ? 'text-orange-600' : 'text-gray-900'}`}>{report.vitals.avgTemp}°C</p>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">当前气压</p>
+                    <p className="text-xs text-gray-500 font-medium">气压</p>
                     <p className="text-3xl font-bold text-gray-900">{report.vitals.avgPressure}<span className="text-xs font-normal text-gray-400 ml-1">hPa</span></p>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">相对高度</p>
+                    <p className="text-xs text-gray-500 font-medium">高度</p>
                     <p className="text-3xl font-bold text-gray-900">{report.vitals.avgHeight}<span className="text-xs font-normal text-gray-400 ml-1">m</span></p>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">上报模组</p>
-                    <p className="text-[10px] font-black text-indigo-500 bg-indigo-50 px-2 py-1 rounded mt-2 inline-block">LTE-CAT1 + GNSS</p>
+                    <p className="text-xs text-gray-500 font-medium">传感器状态</p>
+                    <p className="text-[10px] font-black text-indigo-500 bg-indigo-50 px-2 py-1 rounded mt-2 inline-block uppercase">Online</p>
                   </div>
                 </div>
               </div>
@@ -224,11 +218,11 @@ const App: React.FC = () => {
             <section className="space-y-4">
               <div className="flex items-center justify-between px-2">
                 <div>
-                  <h2 className="text-lg font-bold text-gray-800">全天轨迹图谱</h2>
-                  <p className="text-xs text-gray-400">来自 InfluxDB 坐标流的实时可视化</p>
+                  <h2 className="text-lg font-bold text-gray-800">活动轨迹</h2>
+                  <p className="text-xs text-gray-400">基于 GPS/GNSS 坐标流的实时图谱</p>
                 </div>
                 <div className="bg-white/80 border border-gray-100 text-gray-500 text-[10px] font-bold px-2 py-1 rounded-lg">
-                  {report.coordinates.length} 原始点位
+                  {report.coordinates.length} 点位
                 </div>
               </div>
               <div className="h-[450px] w-full bg-white rounded-[2.5rem] overflow-hidden shadow-xl shadow-gray-200/50 border border-gray-100">
