@@ -10,7 +10,7 @@ import { DailyReport, Pet } from './types';
 
 const PETS: Pet[] = [
   { id: "221", name: "豆腐", breed: "萨摩耶", avatar: "https://picsum.photos/seed/tofu/100/100" },
-  { id: "105", name: "糯米", breed: "边境牧羊犬", avatar: "https://picsum.photos/seed/nuomi/100/100" },
+  { id: "105", name: "糯米", breed: "边境羊犬", avatar: "https://picsum.photos/seed/nuomi/100/100" },
   { id: "302", name: "可乐", breed: "英短蓝猫", avatar: "https://picsum.photos/seed/cola/100/100" },
 ];
 
@@ -31,18 +31,34 @@ const App: React.FC = () => {
     setLastError(null);
     try {
       const response = await fetch(`/api/telemetry?petId=${petId}`);
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "数据获取失败");
+      const rawText = await response.text();
+      
+      let data;
+      try {
+        data = JSON.parse(rawText);
+      } catch (e) {
+        // 如果无法解析 JSON，说明是服务器返回的 HTML 404/500 页面
+        throw new Error(`[HTTP ${response.status}] 服务器未返回 JSON。内容摘要: ${rawText.slice(0, 100)}`);
       }
-      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || `请求失败 (${response.status})`);
+      }
+
+      if (data._empty) {
+        setDbStatus('connected');
+        setLastError(data.message);
+        const { generateDailyReport } = await import('./services/mockData');
+        setReport(generateDailyReport(petId));
+        return;
+      }
+
       setReport(data);
       setDbStatus('connected');
     } catch (err: any) {
-      console.error("InfluxDB Fetch Error:", err);
+      console.error("Fetch Detail Error:", err);
       setDbStatus('error');
       setLastError(err.message);
-      // 降级使用 Mock 数据以保证 UI 展示
       const { generateDailyReport } = await import('./services/mockData');
       setReport(generateDailyReport(petId));
     } finally {
@@ -61,15 +77,8 @@ const App: React.FC = () => {
     setReport(prev => prev ? ({ ...prev, ...updatedFields }) : prev);
   };
 
-  const getSpeciesLabel = (sid: number) => {
-    if (sid === 1) return "小狗模式";
-    if (sid === 2) return "小猫模式";
-    return "智能模式";
-  };
-
   return (
     <div className="min-h-screen bg-[#F5F5F7] pb-12">
-      {/* Top Navigation */}
       <div className="sticky top-0 z-[1001] bg-white/80 backdrop-blur-xl border-b border-gray-100 mb-8">
         <div className="max-w-4xl mx-auto px-6 py-4 flex justify-between items-center">
           <div className="relative">
@@ -138,16 +147,20 @@ const App: React.FC = () => {
 
       <div className={`max-w-4xl mx-auto px-4 md:px-8 space-y-6 transition-all duration-500 ${loading ? 'opacity-50 blur-[2px]' : 'opacity-100 blur-0'}`}>
         
-        {dbStatus === 'error' && (
-          <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-center gap-3 animate-in slide-in-from-top-4">
-            <div className="bg-red-100 p-2 rounded-xl">
-              <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        {(dbStatus === 'error' || (dbStatus === 'connected' && lastError)) && (
+          <div className={`${dbStatus === 'error' ? 'bg-red-50 border-red-100' : 'bg-blue-50 border-blue-100'} border rounded-2xl p-4 flex items-center gap-3 animate-in slide-in-from-top-4`}>
+            <div className={`${dbStatus === 'error' ? 'bg-red-100' : 'bg-blue-100'} p-2 rounded-xl`}>
+              <svg className={`w-5 h-5 ${dbStatus === 'error' ? 'text-red-600' : 'text-blue-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
-            <div>
-              <p className="text-xs font-bold text-red-800">数据库连接异常</p>
-              <p className="text-[10px] text-red-500">原因: {lastError || "请检查云服务环境变量 INFLUX_URL/TOKEN 是否配置正确。"}</p>
+            <div className="flex-1 overflow-hidden">
+              <p className={`text-xs font-bold ${dbStatus === 'error' ? 'text-red-800' : 'text-blue-800'}`}>
+                {dbStatus === 'error' ? '实时数据连接异常' : '数据状态提示'}
+              </p>
+              <div className={`text-[10px] break-all font-mono mt-1 ${dbStatus === 'error' ? 'text-red-500' : 'text-blue-500'}`}>
+                {lastError}
+              </div>
             </div>
           </div>
         )}
@@ -157,7 +170,7 @@ const App: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-transparent hover:border-blue-100 transition-all">
                 <div className="flex justify-between items-start mb-6">
-                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">今日活动 ({dbStatus === 'connected' ? 'InfluxDB' : 'Mock'})</h2>
+                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">今日活动 ({dbStatus === 'connected' && !lastError?.includes('暂无') ? 'InfluxDB' : 'Mock'})</h2>
                   <span className={`text-[10px] px-2.5 py-1 rounded-lg font-bold ${
                     report.activity.activeLevel === 'HIGH' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'
                   }`}>

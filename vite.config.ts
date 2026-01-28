@@ -2,7 +2,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
   build: {
@@ -10,12 +9,7 @@ export default defineConfig({
   },
   server: {
     port: 3000,
-    // 本地开发时，将 /api 请求代理到 Vercel Dev 运行的端口或本地 Server
-    proxy: {
-      '/api': {
-        target: 'http://localhost:3000',
-        changeOrigin: true,
-      },
-    },
+    // 在 Vercel 开发模式下，Vercel CLI 会自动处理 /api 路由，无需手动配置代理。
+    // 手动代理到 3000 端口会触发递归循环，导致 "string did not match pattern" 或 404 错误。
   }
 });
