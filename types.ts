@@ -6,6 +6,8 @@ export interface Pet {
   breed: string;
 }
 
+export type AiProvider = 'gemini' | 'deepseek' | 'qwen';
+
 export interface ActivityStats {
   steps: number;
   completionRate: number;
@@ -36,7 +38,7 @@ export interface DeviceStats {
 export interface DailyReport {
   date: string;
   petId: string;
-  speciesId: number; // Added speciesId
+  speciesId: number; 
   summary: string;
   activity: ActivityStats;
   vitals: VitalStats;

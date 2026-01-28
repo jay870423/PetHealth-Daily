@@ -6,7 +6,6 @@ import AISummary from './components/AISummary';
 import TrendCard from './components/TrendCard';
 import DeviceCard from './components/DeviceCard';
 import DataImportModal from './components/DataImportModal';
-import { generateDailyReport } from './services/mockData';
 import { DailyReport, Pet } from './types';
 
 const PETS: Pet[] = [
@@ -21,33 +20,45 @@ const App: React.FC = () => {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isPetMenuOpen, setIsPetMenuOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [dbStatus, setDbStatus] = useState<'connected' | 'error' | 'syncing'>('syncing');
+  const [lastError, setLastError] = useState<string | null>(null);
 
   const selectedPet = PETS.find(p => p.id === selectedPetId) || PETS[0];
 
-  useEffect(() => {
+  const fetchReport = async (petId: string) => {
     setLoading(true);
-    const timer = setTimeout(() => {
-      const data = generateDailyReport(selectedPetId);
+    setDbStatus('syncing');
+    setLastError(null);
+    try {
+      const response = await fetch(`/api/telemetry?petId=${petId}`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "数据获取失败");
+      }
+      const data = await response.json();
       setReport(data);
+      setDbStatus('connected');
+    } catch (err: any) {
+      console.error("InfluxDB Fetch Error:", err);
+      setDbStatus('error');
+      setLastError(err.message);
+      // 降级使用 Mock 数据以保证 UI 展示
+      const { generateDailyReport } = await import('./services/mockData');
+      setReport(generateDailyReport(petId));
+    } finally {
       setLoading(false);
-    }, 400);
-    return () => clearTimeout(timer);
+    }
+  };
+
+  useEffect(() => {
+    fetchReport(selectedPetId);
+    const interval = setInterval(() => fetchReport(selectedPetId), 300000);
+    return () => clearInterval(interval);
   }, [selectedPetId]);
 
   const handleImportData = (updatedFields: Partial<DailyReport>) => {
     if (!report) return;
-    
-    setReport(prev => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        ...updatedFields,
-        activity: { ...prev.activity, ...(updatedFields.activity || {}) },
-        vitals: { ...prev.vitals, ...(updatedFields.vitals || {}) },
-        device: { ...prev.device, ...(updatedFields.device || {}) },
-        coordinates: updatedFields.coordinates || prev.coordinates
-      };
-    });
+    setReport(prev => prev ? ({ ...prev, ...updatedFields }) : prev);
   };
 
   const getSpeciesLabel = (sid: number) => {
@@ -56,15 +67,9 @@ const App: React.FC = () => {
     return "智能模式";
   };
 
-  if (!report && !loading) return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-white text-gray-400">
-      <div className="animate-bounce mb-4 text-4xl">🐾</div>
-      <p className="font-medium">正在连接宠物云端...</p>
-    </div>
-  );
-
   return (
     <div className="min-h-screen bg-[#F5F5F7] pb-12">
+      {/* Top Navigation */}
       <div className="sticky top-0 z-[1001] bg-white/80 backdrop-blur-xl border-b border-gray-100 mb-8">
         <div className="max-w-4xl mx-auto px-6 py-4 flex justify-between items-center">
           <div className="relative">
@@ -82,13 +87,16 @@ const App: React.FC = () => {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <p className="text-[10px] text-gray-400 font-mono uppercase tracking-tighter">{selectedPet.breed} · {report?.petId || selectedPet.id}</p>
-                  {report && (
-                    <span className="bg-indigo-50 text-indigo-500 text-[8px] px-1.5 py-0.5 rounded font-black tracking-widest uppercase">
-                      {getSpeciesLabel(report.speciesId)}
+                <div className="flex items-center gap-2">
+                  <p className="text-[10px] text-gray-400 font-mono uppercase tracking-tighter">{selectedPet.breed} · {selectedPet.id}</p>
+                  <div className="flex items-center gap-1">
+                    <div className={`w-1.5 h-1.5 rounded-full ${
+                      dbStatus === 'connected' ? 'bg-green-500' : dbStatus === 'syncing' ? 'bg-blue-500 animate-pulse' : 'bg-red-500'
+                    }`}></div>
+                    <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">
+                      {dbStatus === 'connected' ? 'InfluxDB Live' : dbStatus === 'syncing' ? 'Syncing' : 'Mock Mode'}
                     </span>
-                  )}
+                  </div>
                 </div>
               </div>
             </button>
@@ -101,10 +109,7 @@ const App: React.FC = () => {
                   {PETS.map(pet => (
                     <button
                       key={pet.id}
-                      onClick={() => {
-                        setSelectedPetId(pet.id);
-                        setIsPetMenuOpen(false);
-                      }}
+                      onClick={() => { setSelectedPetId(pet.id); setIsPetMenuOpen(false); }}
                       className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors ${selectedPetId === pet.id ? 'bg-indigo-50/50' : ''}`}
                     >
                       <img src={pet.avatar} className="w-8 h-8 rounded-full border border-gray-100" alt={pet.name} />
@@ -126,18 +131,33 @@ const App: React.FC = () => {
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
             </svg>
-            同步 Excel 数据
+            离线补录
           </button>
         </div>
       </div>
 
-      <div className={`max-w-4xl mx-auto px-4 md:px-8 space-y-6 transition-all duration-500 ${loading ? 'opacity-30 scale-[0.98]' : 'opacity-100 scale-100'}`}>
+      <div className={`max-w-4xl mx-auto px-4 md:px-8 space-y-6 transition-all duration-500 ${loading ? 'opacity-50 blur-[2px]' : 'opacity-100 blur-0'}`}>
+        
+        {dbStatus === 'error' && (
+          <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-center gap-3 animate-in slide-in-from-top-4">
+            <div className="bg-red-100 p-2 rounded-xl">
+              <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-xs font-bold text-red-800">数据库连接异常</p>
+              <p className="text-[10px] text-red-500">原因: {lastError || "请检查云服务环境变量 INFLUX_URL/TOKEN 是否配置正确。"}</p>
+            </div>
+          </div>
+        )}
+
         {report && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-transparent hover:border-blue-100 transition-all">
                 <div className="flex justify-between items-start mb-6">
-                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">今日活动 (DELTA)</h2>
+                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">今日活动 ({dbStatus === 'connected' ? 'InfluxDB' : 'Mock'})</h2>
                   <span className={`text-[10px] px-2.5 py-1 rounded-lg font-bold ${
                     report.activity.activeLevel === 'HIGH' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'
                   }`}>
@@ -150,43 +170,32 @@ const App: React.FC = () => {
               </div>
 
               <div className={`rounded-[2rem] p-8 shadow-sm transition-all duration-700 border ${
-                report.vitals.status === 'WARNING' 
-                  ? 'bg-orange-50 border-orange-200 shadow-orange-100' 
-                  : 'bg-white border-transparent'
+                report.vitals.status === 'WARNING' ? 'bg-orange-50 border-orange-200 shadow-orange-100' : 'bg-white border-transparent'
               }`}>
                 <div className="flex justify-between items-start mb-8">
-                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">体征与环境 (VITALS)</h2>
+                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">实时体征 (SENSORS)</h2>
                   <div className={`px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 ${
                     report.vitals.status === 'WARNING' ? 'bg-orange-500 text-white' : 'bg-green-100 text-green-600'
                   }`}>
-                    {report.vitals.status === 'WARNING' && (
-                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                      </svg>
-                    )}
                     {report.vitals.status}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-6">
                   <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">平均体温</p>
-                    <p className={`text-3xl font-bold ${report.vitals.status === 'WARNING' ? 'text-orange-600' : 'text-gray-900'}`}>
-                      {report.vitals.avgTemp}°C
-                    </p>
+                    <p className="text-xs text-gray-500 font-medium">传感器体温</p>
+                    <p className={`text-3xl font-bold ${report.vitals.status === 'WARNING' ? 'text-orange-600' : 'text-gray-900'}`}>{report.vitals.avgTemp}°C</p>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">气压</p>
+                    <p className="text-xs text-gray-500 font-medium">当前气压</p>
                     <p className="text-3xl font-bold text-gray-900">{report.vitals.avgPressure}<span className="text-xs font-normal text-gray-400 ml-1">hPa</span></p>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">当前海拔</p>
+                    <p className="text-xs text-gray-500 font-medium">相对高度</p>
                     <p className="text-3xl font-bold text-gray-900">{report.vitals.avgHeight}<span className="text-xs font-normal text-gray-400 ml-1">m</span></p>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">地理围栏</p>
-                    <p className="text-[10px] font-mono text-gray-400 mt-2 truncate">
-                      {report.coordinates[0]?.[0].toFixed(4)}N, {report.coordinates[0]?.[1].toFixed(4)}E
-                    </p>
+                    <p className="text-xs text-gray-500 font-medium">上报模组</p>
+                    <p className="text-[10px] font-black text-indigo-500 bg-indigo-50 px-2 py-1 rounded mt-2 inline-block">LTE-CAT1 + GNSS</p>
                   </div>
                 </div>
               </div>
@@ -203,16 +212,13 @@ const App: React.FC = () => {
               <div className="flex items-center justify-between px-2">
                 <div>
                   <h2 className="text-lg font-bold text-gray-800">全天轨迹图谱</h2>
-                  <p className="text-xs text-gray-400">基于 GPS 与 LBS 混合定位生成的足迹</p>
+                  <p className="text-xs text-gray-400">来自 InfluxDB 坐标流的实时可视化</p>
                 </div>
-                <div className="flex items-center gap-2">
-                   <div className="bg-white/80 border border-gray-100 text-gray-500 text-[10px] font-bold px-2 py-1 rounded-lg">
-                      {report.coordinates.length} 采集点
-                   </div>
-                   <div className="bg-indigo-50 text-indigo-600 text-[10px] font-black px-2 py-1 rounded-lg tracking-widest uppercase">Precision GL</div>
+                <div className="bg-white/80 border border-gray-100 text-gray-500 text-[10px] font-bold px-2 py-1 rounded-lg">
+                  {report.coordinates.length} 原始点位
                 </div>
               </div>
-              <div className="h-[450px] w-full bg-white rounded-[2.5rem] overflow-hidden shadow-xl shadow-gray-200/50 border border-gray-100 relative">
+              <div className="h-[450px] w-full bg-white rounded-[2.5rem] overflow-hidden shadow-xl shadow-gray-200/50 border border-gray-100">
                 <ActivityMap coordinates={report.coordinates} />
               </div>
             </section>
@@ -220,11 +226,7 @@ const App: React.FC = () => {
         )}
       </div>
 
-      <DataImportModal 
-        isOpen={isImportModalOpen} 
-        onClose={() => setIsImportModalOpen(false)} 
-        onImport={handleImportData}
-      />
+      <DataImportModal isOpen={isImportModalOpen} onClose={() => setIsImportModalOpen(false)} onImport={handleImportData} />
     </div>
   );
 };
