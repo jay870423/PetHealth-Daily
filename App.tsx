@@ -55,24 +55,23 @@ const App: React.FC = () => {
       const isHtml = text.trim().toLowerCase().startsWith('<!doctype') || text.trim().toLowerCase().startsWith('<html');
 
       if (!response.ok || isHtml) {
-        const isSystemUp = await checkApiSystem();
-        let errorMessage = "";
-        
         if (isHtml) {
-          errorMessage = "【路由劫持】API 请求返回了页面 HTML。这说明 vercel.json 的重写规则拦截了 API 路径，或者 api/ 文件夹未在根目录。";
-        } else if (response.status === 404) {
-          errorMessage = isSystemUp 
-            ? "【资源缺失】健康检查在线，但 Telemetry 接口 404。请检查代码是否包含 api/telemetry.ts。" 
-            : "【后端离线】Vercel Functions 未能启动。请在 Vercel 控制台 Functions 选项卡中确认。";
+          throw new Error("【路由异常】API 请求返回了页面 HTML。请检查 vercel.json 的重写规则是否拦截了 api/ 路径。");
+        }
+        
+        if (response.status === 404) {
+          const isSystemUp = await checkApiSystem();
+          throw new Error(isSystemUp 
+            ? "【接口缺失】健康检查在线，但 Telemetry 接口 404。请确认 api/telemetry.ts 是否已编译。" 
+            : "【后端离线】Vercel Functions 服务未响应。请检查部署日志确认服务状态。");
         } else {
+          let msg = `服务器响应错误 (HTTP ${response.status})`;
           try {
             const errorData = JSON.parse(text);
-            errorMessage = errorData.error || errorData.details || `服务器错误 (${response.status})`;
-          } catch {
-            errorMessage = `接口异常 (HTTP ${response.status})`;
-          }
+            msg = errorData.error || errorData.message || msg;
+          } catch (e) {}
+          throw new Error(msg);
         }
-        throw new Error(errorMessage);
       }
 
       const data = JSON.parse(text);
@@ -88,10 +87,10 @@ const App: React.FC = () => {
       setReport(data);
       setDbStatus('connected');
     } catch (err: any) {
-      console.error("Connectivity Log:", err.message);
+      console.error("Diagnostic Error:", err.message);
       setDbStatus('error');
       setLastError(err.message);
-      // Failover to mock data so the UI doesn't break
+      // Failover
       const { generateDailyReport } = await import('./services/mockData');
       setReport(generateDailyReport(petId));
     } finally {
@@ -136,7 +135,7 @@ const App: React.FC = () => {
                       dbStatus === 'connected' ? 'bg-green-500' : dbStatus === 'syncing' ? 'bg-blue-500 animate-pulse' : 'bg-red-500'
                     }`}></div>
                     <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">
-                      {dbStatus === 'connected' ? 'Live' : dbStatus === 'syncing' ? 'Syncing' : 'Failover'}
+                      {dbStatus === 'connected' ? 'Live' : dbStatus === 'syncing' ? 'Sync' : 'Error'}
                     </span>
                   </div>
                 </div>
@@ -185,7 +184,7 @@ const App: React.FC = () => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <div className="flex-1">
-              <p className="text-xs font-bold">连接异常反馈</p>
+              <p className="text-xs font-bold">同步异常</p>
               <p className="text-[10px] opacity-80 leading-relaxed">{lastError}</p>
             </div>
             <button 

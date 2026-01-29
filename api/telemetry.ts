@@ -17,63 +17,66 @@ export default async function handler(req: Request) {
   }
 
   try {
-    const { searchParams } = new URL(req.url);
-    const petId = searchParams.get('petId') || "221";
+    // 解析请求参数
+    const url = new URL(req.url);
+    const petId = url.searchParams.get('petId') || "221";
 
-    const rawUrl = (process.env.INFLUX_URL || "https://zhouyuaninfo.com.cn/influx").trim().replace(/\/+$/, "");
-    const database = (process.env.INFLUX_BUCKET || "pet_health").trim();
-    const token = (process.env.INFLUX_TOKEN || "").trim();
+    // 安全读取环境变量
+    const influxUrl = (process.env.INFLUX_URL || "https://zhouyuaninfo.com.cn/influx").trim().replace(/\/+$/, "");
+    const influxDb = (process.env.INFLUX_BUCKET || "pet_health").trim();
+    const influxToken = (process.env.INFLUX_TOKEN || "").trim();
 
-    // Direct InfluxQL query for v1.8 compatibility
-    const influxQL = `SELECT * FROM pet_activity WHERE tracker_id = '${petId}' ORDER BY time DESC LIMIT 30`;
-    const targetUrl = `${rawUrl}/query?db=${encodeURIComponent(database)}&q=${encodeURIComponent(influxQL)}`;
-    
-    const dbResponse = await fetch(targetUrl, {
+    // 构建 InfluxQL 查询
+    const query = `SELECT * FROM pet_activity WHERE tracker_id = '${petId}' ORDER BY time DESC LIMIT 30`;
+    const endpoint = `${influxUrl}/query?db=${encodeURIComponent(influxDb)}&q=${encodeURIComponent(query)}`;
+
+    // 发起数据库请求
+    const response = await fetch(endpoint, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
-        'User-Agent': 'PetHealthAPI/1.8',
-        ...(token ? { 'Authorization': `Token ${token}` } : {}),
-      },
-      signal: AbortSignal.timeout(10000)
+        ...(influxToken ? { 'Authorization': `Token ${influxToken}` } : {}),
+      }
     });
 
-    if (!dbResponse.ok) {
-      const errorText = await dbResponse.text();
+    const responseText = await response.text();
+
+    if (!response.ok) {
       return new Response(JSON.stringify({
-        error: "Database request failed",
-        status: dbResponse.status,
-        details: errorText
-      }), { status: dbResponse.status, headers: corsHeaders });
+        error: "数据库查询失败",
+        status: response.status,
+        details: responseText.slice(0, 200)
+      }), { status: response.status, headers: corsHeaders });
     }
 
-    const data = await dbResponse.json();
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      return new Response(JSON.stringify({ error: "数据库返回了非 JSON 数据", raw: responseText.slice(0, 100) }), { status: 500, headers: corsHeaders });
+    }
+
     const series = data.results?.[0]?.series?.[0];
-    
     if (!series || !series.values || series.values.length === 0) {
-      return new Response(JSON.stringify({ 
-        _empty: true, 
-        message: `No data found in 'pet_activity' for tracker_id '${petId}'. Check if device is reporting.`,
-        debug: { table: 'pet_activity', petId }
-      }), { status: 200, headers: corsHeaders });
+      return new Response(JSON.stringify({ _empty: true, message: `未找到 ID 为 ${petId} 的设备数据` }), { status: 200, headers: corsHeaders });
     }
 
+    const columns = series.columns;
+    const latestRow = series.values[0];
     const getVal = (row: any[], name: string) => {
-      const idx = series.columns.indexOf(name);
+      const idx = columns.indexOf(name);
       return idx !== -1 ? row[idx] : null;
     };
 
-    const latestRow = series.values[0];
-    
-    // Trajectory extraction
+    // 提取轨迹
     const coordinates: [number, number][] = series.values
       .map((v: any[]) => [
         parseFloat(getVal(v, 'lat') || 0), 
         parseFloat(getVal(v, 'lng') || 0)
       ] as [number, number])
-      .filter(c => c[0] !== 0 && !isNaN(c[0]));
+      .filter(c => !isNaN(c[0]) && c[0] !== 0);
 
-    // Health metrics from Influx fields: step, temp, batvol, press, rsrp, stride
+    // 字段映射：step, temp, batvol, press, rsrp, stride
     const steps = Math.round(Number(getVal(latestRow, 'step') || 0));
     const avgTemp = parseFloat(Number(getVal(latestRow, 'temp') || 38.5).toFixed(2));
     const battery = parseFloat(Number(getVal(latestRow, 'batvol') || 3.7).toFixed(2));
@@ -89,7 +92,7 @@ export default async function handler(req: Request) {
         steps,
         completionRate: parseFloat((steps / 10000).toFixed(2)),
         activeLevel: steps > 8000 ? 'HIGH' : steps > 4000 ? 'NORMAL' : 'LOW',
-        stride: stride > 10 ? stride / 10000 : stride // Handle both mm and m
+        stride: stride > 10 ? stride / 10000 : stride
       },
       vitals: {
         avgTemp,
@@ -111,8 +114,8 @@ export default async function handler(req: Request) {
 
   } catch (error: any) {
     return new Response(JSON.stringify({ 
-      error: "Edge runtime exception", 
-      details: error.message
+      error: "Edge Function Runtime Error", 
+      message: error.message 
     }), { status: 500, headers: corsHeaders });
   }
 }
