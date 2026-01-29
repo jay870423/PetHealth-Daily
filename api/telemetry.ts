@@ -4,77 +4,66 @@ export const config = {
 };
 
 export default async function handler(req: Request) {
-  try {
-    // 1. 安全解析请求参数
-    let petId = "221";
-    try {
-      const url = new URL(req.url);
-      petId = url.searchParams.get('petId') || "221";
-    } catch (e) {
-      // 如果 req.url 解析失败（某些 Edge 环境下），尝试降级处理
-      console.warn("Request URL parsing warning, using fallback petId");
-    }
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Accept',
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store, s-maxage=0',
+  };
 
-    // 2. 强鲁棒性的环境变量读取 (去除任何可能的隐形成分)
+  // 处理 Preflight 请求
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  try {
+    const { searchParams } = new URL(req.url);
+    const petId = searchParams.get('petId') || "221";
+
     const rawUrl = (process.env.INFLUX_URL || "https://zhouyuaninfo.com.cn/influx").trim().replace(/\/+$/, "");
     const database = (process.env.INFLUX_BUCKET || "pet_health").trim();
     const token = (process.env.INFLUX_TOKEN || "").trim();
 
-    // 3. 构造查询语句 (InfluxQL 1.x 格式)
-    // 确保 tracker_id 匹配正确，增加 LIMIT 确保响应速度
     const influxQL = `SELECT * FROM pet_activity WHERE tracker_id = '${petId}' ORDER BY time DESC LIMIT 20`;
-    
-    // 4. 使用字符串拼接构造目标 URL (最稳健的方式，避免 Edge Runtime 的 URL 模式匹配错误)
     const targetUrl = `${rawUrl}/query?db=${encodeURIComponent(database)}&q=${encodeURIComponent(influxQL)}`;
-
-    console.debug(`Fetching from InfluxDB: ${rawUrl}/query (petId: ${petId})`);
-
-    // 5. 发起请求
-    const response = await fetch(targetUrl, {
+    
+    const dbResponse = await fetch(targetUrl, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
-        'User-Agent': 'PetHealthDashboard/1.1',
+        'User-Agent': 'PetHealthAPI/1.4',
         ...(token ? { 'Authorization': `Token ${token}` } : {}),
       },
+      signal: AbortSignal.timeout(10000) // 增加超时机制
     });
 
-    const responseText = await response.text();
+    const bodyText = await dbResponse.text();
 
-    if (!response.ok) {
+    if (!dbResponse.ok) {
       return new Response(JSON.stringify({
-        error: `数据库响应异常 (${response.status})`,
-        details: responseText.slice(0, 200)
-      }), {
-        status: response.status,
-        headers: { 'Content-Type': 'application/json' }
-      });
+        error: "数据库访问失败",
+        details: `InfluxDB Status: ${dbResponse.status}`
+      }), { status: dbResponse.status, headers: corsHeaders });
     }
 
     let data;
     try {
-      data = JSON.parse(responseText);
+      data = JSON.parse(bodyText);
     } catch (e) {
-      return new Response(JSON.stringify({ 
-        error: "JSON 解析失败", 
-        details: responseText.slice(0, 100)
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return new Response(JSON.stringify({
+        error: "数据库格式异常",
+        details: "Invalid JSON response from InfluxDB"
+      }), { status: 500, headers: corsHeaders });
     }
 
     const series = data.results?.[0]?.series?.[0];
     
-    // 6. 处理空数据情况
     if (!series || !series.values || series.values.length === 0) {
       return new Response(JSON.stringify({ 
         _empty: true, 
-        message: `设备 ${petId} 暂无历史数据` 
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
+        message: `终端 ${petId} 目前处于离线状态或暂无报文` 
+      }), { status: 200, headers: corsHeaders });
     }
 
     const getVal = (row: any[], colName: string) => {
@@ -83,17 +72,10 @@ export default async function handler(req: Request) {
     };
 
     const latestRow = series.values[0];
-    
-    // 提取坐标流
     const coords: [number, number][] = series.values
-      .map((v: any[]) => {
-        const lat = parseFloat(getVal(v, 'lat'));
-        const lng = parseFloat(getVal(v, 'lng'));
-        return [lat, lng] as [number, number];
-      })
+      .map((v: any[]) => [parseFloat(getVal(v, 'lat')), parseFloat(getVal(v, 'lng'))] as [number, number])
       .filter(c => !isNaN(c[0]) && !isNaN(c[1]) && c[0] !== 0);
 
-    // 数据清洗与聚合
     const steps = Math.round(Number(getVal(latestRow, 'step') || 0));
     const avgTemp = parseFloat(Number(getVal(latestRow, 'temp') || 38.5).toFixed(2));
     const battery = parseFloat(Number(getVal(latestRow, 'batvol') || 3.75).toFixed(2));
@@ -105,6 +87,7 @@ export default async function handler(req: Request) {
         steps,
         completionRate: parseFloat((steps / 10000).toFixed(2)),
         activeLevel: steps > 8000 ? 'HIGH' : steps > 4000 ? 'NORMAL' : 'LOW',
+        stride: 0.45
       },
       vitals: {
         avgTemp,
@@ -119,21 +102,15 @@ export default async function handler(req: Request) {
         lastSeen: getVal(latestRow, 'time') || new Date().toISOString()
       },
       coordinates: coords.length > 0 ? coords : [[31.2304, 121.4737]],
-      trend: { vsYesterday: 0.05, vs7DayAvg: -0.02, trendLabel: 'STABLE' }
+      trend: { vsYesterday: 0.05, vs7DayAvg: -0.01, trendLabel: 'STABLE' }
     };
 
-    return new Response(JSON.stringify(report), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return new Response(JSON.stringify(report), { status: 200, headers: corsHeaders });
 
   } catch (error: any) {
     return new Response(JSON.stringify({ 
-      error: "API 系统性异常", 
-      details: error.message 
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
+      error: "Edge Function Runtime Error", 
+      details: error.message
+    }), { status: 500, headers: corsHeaders });
   }
 }

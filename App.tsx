@@ -25,17 +25,60 @@ const App: React.FC = () => {
 
   const selectedPet = PETS.find(p => p.id === selectedPetId) || PETS[0];
 
+  const checkApiSystem = async () => {
+    try {
+      // 显式指定请求头，避免被浏览器缓存误导
+      const res = await fetch('/api/health?_t=' + Date.now(), { 
+        headers: { 'Accept': 'application/json' } 
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      return data.status === "ok";
+    } catch {
+      return false;
+    }
+  };
+
   const fetchReport = async (petId: string) => {
     setLoading(true);
     setDbStatus('syncing');
     setLastError(null);
+    
     try {
-      // 使用绝对或相对路径
-      const response = await fetch(`/api/telemetry?petId=${petId}`);
-      const data = await response.json();
+      const url = `/api/telemetry?petId=${petId}&_v=${Date.now()}`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        cache: 'no-store'
+      });
+      
+      const text = await response.text();
+      const isHtml = text.trim().toLowerCase().startsWith('<!doctype') || text.trim().toLowerCase().startsWith('<html');
+
+      // 404 且返回 HTML，意味着请求被 index.html 劫持
+      if (response.status === 404 || isHtml) {
+        const isSystemUp = await checkApiSystem();
+        let advice = "";
+        
+        if (isHtml) {
+          advice = "【部署错误】API 请求返回了页面 HTML。这证实了 vercel.json 的重写规则拦截了 API 路径。请确保 api/ 目录位于项目根目录。";
+        } else if (isSystemUp) {
+          advice = "【路由错误】健康检查接口在线，但 telemetry 接口返回 404。请检查 api/telemetry.ts 是否已提交或文件名是否有误。";
+        } else {
+          advice = "【后端离线】Vercel Functions 未能启动。请在 Vercel 控制台查看 'Functions' 选项卡确认服务是否已部署。";
+        }
+        throw new Error(advice);
+      }
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (parseErr) {
+        throw new Error(`【解析错误】服务器返回了非 JSON 内容。`);
+      }
       
       if (!response.ok) {
-        throw new Error(`${data.error || '连接失败'}: ${data.details || ''}`);
+        throw new Error(data.error || `【后端异常】服务返回状态码 ${response.status}`);
       }
 
       if (data._empty) {
@@ -49,10 +92,11 @@ const App: React.FC = () => {
       setReport(data);
       setDbStatus('connected');
     } catch (err: any) {
-      console.error("Fetch Detail Error:", err);
+      console.error("Connectivity Diagnostic Log:", err);
       setDbStatus('error');
       setLastError(err.message);
-      // 失败后使用 Mock 数据兜底，确保 UI 不空白
+
+      // 故障转移：使用 Mock 数据展示 UI，避免白屏
       const { generateDailyReport } = await import('./services/mockData');
       setReport(generateDailyReport(petId));
     } finally {
@@ -62,7 +106,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     fetchReport(selectedPetId);
-    const interval = setInterval(() => fetchReport(selectedPetId), 60000); // 1分钟轮询一次
+    const interval = setInterval(() => fetchReport(selectedPetId), 60000);
     return () => clearInterval(interval);
   }, [selectedPetId]);
 
@@ -74,14 +118,14 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#F5F5F7] pb-12">
       <div className="sticky top-0 z-[1001] bg-white/80 backdrop-blur-xl border-b border-gray-100 mb-8">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex justify-between items-center">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
           <div className="relative">
             <button 
               onClick={() => setIsPetMenuOpen(!isPetMenuOpen)}
               className="flex items-center gap-3 hover:bg-gray-50 p-1 rounded-2xl transition-colors active:scale-95"
             >
               <div className="w-10 h-10 rounded-full bg-indigo-500 overflow-hidden border-2 border-white shadow-sm ring-2 ring-indigo-100">
-                 <img src={selectedPet.avatar} alt={selectedPet.name} />
+                 <img src={selectedPet.avatar} alt={selectedPet.name} className="w-full h-full object-cover" />
               </div>
               <div className="text-left">
                 <div className="flex items-center gap-1">
@@ -97,7 +141,7 @@ const App: React.FC = () => {
                       dbStatus === 'connected' ? 'bg-green-500' : dbStatus === 'syncing' ? 'bg-blue-500 animate-pulse' : 'bg-red-500'
                     }`}></div>
                     <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">
-                      {dbStatus === 'connected' ? 'InfluxDB Live' : dbStatus === 'syncing' ? 'Syncing' : 'Mode: Failover'}
+                      {dbStatus === 'connected' ? 'Live' : dbStatus === 'syncing' ? 'Syncing' : 'Mode: Failover'}
                     </span>
                   </div>
                 </div>
@@ -115,7 +159,7 @@ const App: React.FC = () => {
                       onClick={() => { setSelectedPetId(pet.id); setIsPetMenuOpen(false); }}
                       className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors ${selectedPetId === pet.id ? 'bg-indigo-50/50' : ''}`}
                     >
-                      <img src={pet.avatar} className="w-8 h-8 rounded-full border border-gray-100" alt={pet.name} />
+                      <img src={pet.avatar} className="w-8 h-8 rounded-full border border-gray-100 object-cover" alt={pet.name} />
                       <div className="text-left">
                         <p className="text-sm font-bold text-gray-800">{pet.name}</p>
                         <p className="text-[10px] text-gray-400">{pet.breed}</p>
@@ -139,101 +183,99 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      <div className={`max-w-4xl mx-auto px-4 md:px-8 space-y-6 transition-all duration-500 ${loading ? 'opacity-50 blur-[2px]' : 'opacity-100 blur-0'}`}>
+      <div className={`max-w-6xl mx-auto px-4 md:px-8 space-y-6 transition-all duration-500 ${loading ? 'opacity-50 blur-[2px]' : 'opacity-100 blur-0'}`}>
         
-        {(dbStatus === 'error' || (dbStatus === 'connected' && lastError)) && (
-          <div className={`${dbStatus === 'error' ? 'bg-red-50 border-red-100 shadow-sm' : 'bg-blue-50 border-blue-100'} border rounded-2xl p-4 flex items-center gap-3 animate-in slide-in-from-top-4`}>
-            <div className={`${dbStatus === 'error' ? 'bg-red-100' : 'bg-blue-100'} p-2 rounded-xl flex-shrink-0`}>
-              <svg className={`w-5 h-5 ${dbStatus === 'error' ? 'text-red-600' : 'text-blue-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
+        {lastError && (
+          <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-center gap-3 text-red-600 shadow-sm animate-in slide-in-from-top-4">
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div className="flex-1">
+              <p className="text-xs font-bold">同步异常反馈</p>
+              <p className="text-[10px] opacity-80 leading-relaxed">{lastError}</p>
             </div>
-            <div className="flex-1 overflow-hidden">
-              <p className={`text-xs font-bold ${dbStatus === 'error' ? 'text-red-800' : 'text-blue-800'}`}>
-                {dbStatus === 'error' ? '数据同步异常' : '数据状态'}
-              </p>
-              <div className={`text-[10px] break-all font-mono mt-0.5 ${dbStatus === 'error' ? 'text-red-500' : 'text-blue-500'}`}>
-                {lastError}
-              </div>
-            </div>
+            <button 
+              onClick={() => fetchReport(selectedPetId)} 
+              className="text-[10px] font-black uppercase bg-white border border-red-200 text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
+            >
+              重试
+            </button>
           </div>
         )}
 
         {report && (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-transparent hover:border-blue-100 transition-all">
-                <div className="flex justify-between items-start mb-6">
-                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">今日活动 (STEPS)</h2>
-                  <span className={`text-[10px] px-2.5 py-1 rounded-lg font-bold ${
-                    report.activity.activeLevel === 'HIGH' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'
-                  }`}>
-                    {report.activity.activeLevel} LEVEL
-                  </span>
-                </div>
-                <div className="flex justify-center">
-                  <StepRing steps={report.activity.steps} goal={10000} />
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pb-12">
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-gray-100 flex flex-col md:flex-row items-center gap-8">
+                <StepRing steps={report.activity.steps} goal={10000} />
+                <div className="flex-1 space-y-4 w-full">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">活跃等级</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      report.activity.activeLevel === 'HIGH' ? 'bg-orange-100 text-orange-600' : 
+                      report.activity.activeLevel === 'NORMAL' ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600'
+                    }`}>{report.activity.activeLevel}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-[10px] text-gray-400 uppercase">目标达成</p>
+                      <p className="text-xl font-bold text-gray-800">{(report.activity.completionRate * 100).toFixed(0)}%</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-gray-400 uppercase">平均步幅</p>
+                      <p className="text-xl font-bold text-gray-800">{report.activity.stride}m</p>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div className={`rounded-[2rem] p-8 shadow-sm transition-all duration-700 border ${
-                report.vitals.status === 'WARNING' ? 'bg-orange-50 border-orange-200 shadow-orange-100' : 'bg-white border-transparent'
-              }`}>
-                <div className="flex justify-between items-start mb-8">
-                  <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">实时体征 (VITALS)</h2>
-                  <div className={`px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 ${
-                    report.vitals.status === 'WARNING' ? 'bg-orange-500 text-white' : 'bg-green-100 text-green-600'
-                  }`}>
-                    {report.vitals.status}
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">体温</p>
-                    <p className={`text-3xl font-bold ${report.vitals.status === 'WARNING' ? 'text-orange-600' : 'text-gray-900'}`}>{report.vitals.avgTemp}°C</p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">气压</p>
-                    <p className="text-3xl font-bold text-gray-900">{report.vitals.avgPressure}<span className="text-xs font-normal text-gray-400 ml-1">hPa</span></p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">高度</p>
-                    <p className="text-3xl font-bold text-gray-900">{report.vitals.avgHeight}<span className="text-xs font-normal text-gray-400 ml-1">m</span></p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-xs text-gray-500 font-medium">传感器状态</p>
-                    <p className="text-[10px] font-black text-indigo-500 bg-indigo-50 px-2 py-1 rounded mt-2 inline-block uppercase">Online</p>
-                  </div>
-                </div>
+              <AISummary report={report} />
+
+              <div className="bg-white rounded-[2rem] h-[450px] shadow-sm border border-gray-100 overflow-hidden relative">
+                <ActivityMap coordinates={report.coordinates} />
               </div>
             </div>
 
-            <AISummary report={report} />
+            <div className="space-y-6">
+              <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-gray-100">
+                <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-6">核心体征 (Vitals)</h3>
+                <div className="space-y-6">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="text-xs text-gray-500">平均体温</p>
+                      <p className="text-2xl font-bold text-gray-900">{report.vitals.avgTemp}°C</p>
+                    </div>
+                    <div className={`p-2 rounded-xl ${report.vitals.status === 'WARNING' ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-500'}`}>
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-[10px] text-gray-400 uppercase">平均气压</p>
+                      <p className="font-bold text-gray-800">{report.vitals.avgPressure} hPa</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-gray-400 uppercase">海拔高度</p>
+                      <p className="font-bold text-gray-800">{report.vitals.avgHeight} m</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <TrendCard trend={report.trend} />
               <DeviceCard device={report.device} />
             </div>
-
-            <section className="space-y-4">
-              <div className="flex items-center justify-between px-2">
-                <div>
-                  <h2 className="text-lg font-bold text-gray-800">活动轨迹</h2>
-                  <p className="text-xs text-gray-400">基于 GPS/GNSS 坐标流的实时图谱</p>
-                </div>
-                <div className="bg-white/80 border border-gray-100 text-gray-500 text-[10px] font-bold px-2 py-1 rounded-lg">
-                  {report.coordinates.length} 点位
-                </div>
-              </div>
-              <div className="h-[450px] w-full bg-white rounded-[2.5rem] overflow-hidden shadow-xl shadow-gray-200/50 border border-gray-100">
-                <ActivityMap coordinates={report.coordinates} />
-              </div>
-            </section>
-          </>
+          </div>
         )}
       </div>
 
-      <DataImportModal isOpen={isImportModalOpen} onClose={() => setIsImportModalOpen(false)} onImport={handleImportData} />
+      <DataImportModal 
+        isOpen={isImportModalOpen} 
+        onClose={() => setIsImportModalOpen(false)} 
+        onImport={handleImportData} 
+      />
     </div>
   );
 };
