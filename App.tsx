@@ -27,7 +27,6 @@ const App: React.FC = () => {
 
   const checkApiSystem = async () => {
     try {
-      // 显式指定请求头，避免被浏览器缓存误导
       const res = await fetch('/api/health?_t=' + Date.now(), { 
         headers: { 'Accept': 'application/json' } 
       });
@@ -55,31 +54,28 @@ const App: React.FC = () => {
       const text = await response.text();
       const isHtml = text.trim().toLowerCase().startsWith('<!doctype') || text.trim().toLowerCase().startsWith('<html');
 
-      // 404 且返回 HTML，意味着请求被 index.html 劫持
-      if (response.status === 404 || isHtml) {
+      if (!response.ok || isHtml) {
         const isSystemUp = await checkApiSystem();
-        let advice = "";
+        let errorMessage = "";
         
         if (isHtml) {
-          advice = "【部署错误】API 请求返回了页面 HTML。这证实了 vercel.json 的重写规则拦截了 API 路径。请确保 api/ 目录位于项目根目录。";
-        } else if (isSystemUp) {
-          advice = "【路由错误】健康检查接口在线，但 telemetry 接口返回 404。请检查 api/telemetry.ts 是否已提交或文件名是否有误。";
+          errorMessage = "【路由劫持】API 请求返回了页面 HTML。这说明 vercel.json 的重写规则拦截了 API 路径，或者 api/ 文件夹未在根目录。";
+        } else if (response.status === 404) {
+          errorMessage = isSystemUp 
+            ? "【资源缺失】健康检查在线，但 Telemetry 接口 404。请检查代码是否包含 api/telemetry.ts。" 
+            : "【后端离线】Vercel Functions 未能启动。请在 Vercel 控制台 Functions 选项卡中确认。";
         } else {
-          advice = "【后端离线】Vercel Functions 未能启动。请在 Vercel 控制台查看 'Functions' 选项卡确认服务是否已部署。";
+          try {
+            const errorData = JSON.parse(text);
+            errorMessage = errorData.error || errorData.details || `服务器错误 (${response.status})`;
+          } catch {
+            errorMessage = `接口异常 (HTTP ${response.status})`;
+          }
         }
-        throw new Error(advice);
+        throw new Error(errorMessage);
       }
 
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (parseErr) {
-        throw new Error(`【解析错误】服务器返回了非 JSON 内容。`);
-      }
-      
-      if (!response.ok) {
-        throw new Error(data.error || `【后端异常】服务返回状态码 ${response.status}`);
-      }
+      const data = JSON.parse(text);
 
       if (data._empty) {
         setDbStatus('connected');
@@ -92,11 +88,10 @@ const App: React.FC = () => {
       setReport(data);
       setDbStatus('connected');
     } catch (err: any) {
-      console.error("Connectivity Diagnostic Log:", err);
+      console.error("Connectivity Log:", err.message);
       setDbStatus('error');
       setLastError(err.message);
-
-      // 故障转移：使用 Mock 数据展示 UI，避免白屏
+      // Failover to mock data so the UI doesn't break
       const { generateDailyReport } = await import('./services/mockData');
       setReport(generateDailyReport(petId));
     } finally {
@@ -141,7 +136,7 @@ const App: React.FC = () => {
                       dbStatus === 'connected' ? 'bg-green-500' : dbStatus === 'syncing' ? 'bg-blue-500 animate-pulse' : 'bg-red-500'
                     }`}></div>
                     <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">
-                      {dbStatus === 'connected' ? 'Live' : dbStatus === 'syncing' ? 'Syncing' : 'Mode: Failover'}
+                      {dbStatus === 'connected' ? 'Live' : dbStatus === 'syncing' ? 'Syncing' : 'Failover'}
                     </span>
                   </div>
                 </div>
@@ -184,14 +179,13 @@ const App: React.FC = () => {
       </div>
 
       <div className={`max-w-6xl mx-auto px-4 md:px-8 space-y-6 transition-all duration-500 ${loading ? 'opacity-50 blur-[2px]' : 'opacity-100 blur-0'}`}>
-        
         {lastError && (
           <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-center gap-3 text-red-600 shadow-sm animate-in slide-in-from-top-4">
             <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <div className="flex-1">
-              <p className="text-xs font-bold">同步异常反馈</p>
+              <p className="text-xs font-bold">连接异常反馈</p>
               <p className="text-[10px] opacity-80 leading-relaxed">{lastError}</p>
             </div>
             <button 
