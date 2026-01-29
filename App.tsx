@@ -25,16 +25,16 @@ const App: React.FC = () => {
 
   const selectedPet = PETS.find(p => p.id === selectedPetId) || PETS[0];
 
-  const checkApiSystem = async () => {
+  const getSystemStatus = async (): Promise<string> => {
     try {
-      const res = await fetch('/api/health?_t=' + Date.now(), { 
-        headers: { 'Accept': 'application/json' } 
-      });
-      if (!res.ok) return false;
-      const data = await res.json();
-      return data.status === "ok";
-    } catch {
-      return false;
+      const res = await fetch('/api/health?_t=' + Date.now());
+      if (res.ok) {
+        const data = await res.json();
+        return data.status === "ok" ? "ONLINE" : `ERROR(${res.status})`;
+      }
+      return `HTTP_${res.status}`;
+    } catch (e) {
+      return "FETCH_FAILED";
     }
   };
 
@@ -56,21 +56,22 @@ const App: React.FC = () => {
 
       if (!response.ok || isHtml) {
         if (isHtml) {
-          throw new Error("【路由异常】API 请求返回了页面 HTML。请检查 vercel.json 的重写规则是否拦截了 api/ 路径。");
+          throw new Error("【路由异常】接口被重定向到了 HTML 页面。请检查 vercel.json 的 rewrites 配置。");
         }
         
+        const systemStatus = await getSystemStatus();
+        
         if (response.status === 404) {
-          const isSystemUp = await checkApiSystem();
-          throw new Error(isSystemUp 
-            ? "【接口缺失】健康检查在线，但 Telemetry 接口 404。请确认 api/telemetry.ts 是否已编译。" 
-            : "【后端离线】Vercel Functions 服务未响应。请检查部署日志确认服务状态。");
-        } else {
-          let msg = `服务器响应错误 (HTTP ${response.status})`;
+          throw new Error(`【后端离线】接口 404 (系统状态: ${systemStatus})。请确认 api/ 文件夹已正确部署。`);
+        } else if (response.status === 500) {
+          let detail = "服务器内部错误";
           try {
-            const errorData = JSON.parse(text);
-            msg = errorData.error || errorData.message || msg;
+            const err = JSON.parse(text);
+            detail = err.message || err.error || detail;
           } catch (e) {}
-          throw new Error(msg);
+          throw new Error(`【后端崩溃】HTTP 500: ${detail}`);
+        } else {
+          throw new Error(`【接口异常】HTTP ${response.status} (系统状态: ${systemStatus})`);
         }
       }
 
@@ -90,7 +91,7 @@ const App: React.FC = () => {
       console.error("Diagnostic Error:", err.message);
       setDbStatus('error');
       setLastError(err.message);
-      // Failover
+      // Failover to mock data
       const { generateDailyReport } = await import('./services/mockData');
       setReport(generateDailyReport(petId));
     } finally {
@@ -135,7 +136,7 @@ const App: React.FC = () => {
                       dbStatus === 'connected' ? 'bg-green-500' : dbStatus === 'syncing' ? 'bg-blue-500 animate-pulse' : 'bg-red-500'
                     }`}></div>
                     <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">
-                      {dbStatus === 'connected' ? 'Live' : dbStatus === 'syncing' ? 'Sync' : 'Error'}
+                      {dbStatus === 'connected' ? 'Live' : dbStatus === 'syncing' ? 'Sync' : 'Failover'}
                     </span>
                   </div>
                 </div>
@@ -184,14 +185,14 @@ const App: React.FC = () => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <div className="flex-1">
-              <p className="text-xs font-bold">同步异常</p>
-              <p className="text-[10px] opacity-80 leading-relaxed">{lastError}</p>
+              <p className="text-xs font-bold">同步诊断报告</p>
+              <p className="text-[10px] opacity-80 leading-relaxed font-mono">{lastError}</p>
             </div>
             <button 
               onClick={() => fetchReport(selectedPetId)} 
               className="text-[10px] font-black uppercase bg-white border border-red-200 text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
             >
-              重试
+              尝试修复
             </button>
           </div>
         )}

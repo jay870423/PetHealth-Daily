@@ -7,7 +7,7 @@ export default async function handler(req: Request) {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Accept, Authorization, X-Requested-With',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store, s-maxage=0',
   };
@@ -17,20 +17,18 @@ export default async function handler(req: Request) {
   }
 
   try {
-    // 解析请求参数
     const url = new URL(req.url);
     const petId = url.searchParams.get('petId') || "221";
 
-    // 安全读取环境变量
     const influxUrl = (process.env.INFLUX_URL || "https://zhouyuaninfo.com.cn/influx").trim().replace(/\/+$/, "");
     const influxDb = (process.env.INFLUX_BUCKET || "pet_health").trim();
     const influxToken = (process.env.INFLUX_TOKEN || "").trim();
 
-    // 构建 InfluxQL 查询
     const query = `SELECT * FROM pet_activity WHERE tracker_id = '${petId}' ORDER BY time DESC LIMIT 30`;
     const endpoint = `${influxUrl}/query?db=${encodeURIComponent(influxDb)}&q=${encodeURIComponent(query)}`;
 
-    // 发起数据库请求
+    console.log(`[Telemetry] Connecting to ${endpoint}`);
+
     const response = await fetch(endpoint, {
       method: 'GET',
       headers: {
@@ -42,10 +40,11 @@ export default async function handler(req: Request) {
     const responseText = await response.text();
 
     if (!response.ok) {
+      console.error(`[Telemetry] InfluxDB Error: ${response.status}`, responseText);
       return new Response(JSON.stringify({
         error: "数据库查询失败",
         status: response.status,
-        details: responseText.slice(0, 200)
+        message: responseText.slice(0, 500)
       }), { status: response.status, headers: corsHeaders });
     }
 
@@ -53,7 +52,10 @@ export default async function handler(req: Request) {
     try {
       data = JSON.parse(responseText);
     } catch (e) {
-      return new Response(JSON.stringify({ error: "数据库返回了非 JSON 数据", raw: responseText.slice(0, 100) }), { status: 500, headers: corsHeaders });
+      return new Response(JSON.stringify({ 
+        error: "无效的数据库响应", 
+        details: "Expected JSON but got something else." 
+      }), { status: 500, headers: corsHeaders });
     }
 
     const series = data.results?.[0]?.series?.[0];
@@ -68,7 +70,6 @@ export default async function handler(req: Request) {
       return idx !== -1 ? row[idx] : null;
     };
 
-    // 提取轨迹
     const coordinates: [number, number][] = series.values
       .map((v: any[]) => [
         parseFloat(getVal(v, 'lat') || 0), 
@@ -76,7 +77,6 @@ export default async function handler(req: Request) {
       ] as [number, number])
       .filter(c => !isNaN(c[0]) && c[0] !== 0);
 
-    // 字段映射：step, temp, batvol, press, rsrp, stride
     const steps = Math.round(Number(getVal(latestRow, 'step') || 0));
     const avgTemp = parseFloat(Number(getVal(latestRow, 'temp') || 38.5).toFixed(2));
     const battery = parseFloat(Number(getVal(latestRow, 'batvol') || 3.7).toFixed(2));
@@ -113,6 +113,7 @@ export default async function handler(req: Request) {
     return new Response(JSON.stringify(report), { status: 200, headers: corsHeaders });
 
   } catch (error: any) {
+    console.error(`[Telemetry] Runtime Exception:`, error);
     return new Response(JSON.stringify({ 
       error: "Edge Function Runtime Error", 
       message: error.message 
