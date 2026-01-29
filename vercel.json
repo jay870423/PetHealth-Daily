@@ -1,13 +1,20 @@
 
 {
+  "version": 2,
   "cleanUrls": true,
   "trailingSlash": false,
+  "functions": {
+    "api/*.ts": {
+      "runtime": "edge"
+    }
+  },
   "rewrites": [
     {
-      "handle": "filesystem"
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ],
