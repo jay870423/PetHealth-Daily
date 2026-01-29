@@ -11,16 +11,24 @@ export const generatePetSummary = async (report: DailyReport, provider: AiProvid
       body: JSON.stringify({ report, provider }),
     });
 
+    const contentType = response.headers.get("content-type");
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'AI 服务请求失败');
+      if (contentType && contentType.includes("application/json")) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+      throw new Error(`网络请求失败: ${response.status}`);
+    }
+
+    if (!contentType || !contentType.includes("application/json")) {
+      throw new Error("服务器返回了非 JSON 格式的响应");
     }
 
     const data = await response.json();
-    return data.text || "数据同步完成，宠物状态良好。";
-  } catch (error) {
-    console.error(`AI 分析服务 (${provider}) 异常:`, error);
+    return data.text || "日报分析完成，体征状态正常。";
+  } catch (error: any) {
+    console.error(`AI 分析服务 (${provider}) 异常:`, error.message);
     const isHighActivity = report.activity.steps > 8000;
-    return `[实时同步中] ${isHighActivity ? '今天是个运动小能手！' : '今天比较安静，我正在享受悠闲时光。'} 🐾`;
+    return `[实时同步中] ${isHighActivity ? '今天运动量满分，我是最棒的！' : '今天稍微偷了点懒，但感觉很舒适。'} 🐾 (错误: ${error.message.substring(0, 20)}...)`;
   }
 };

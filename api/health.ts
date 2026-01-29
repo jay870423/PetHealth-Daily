@@ -4,17 +4,20 @@ export const config = {
 };
 
 export default async function handler(req: Request) {
+  const corsHeaders = {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'no-store, max-age=0'
+  };
+
   return new Response(JSON.stringify({ 
     status: "ok", 
-    message: "PetHealth API Gateway is Online",
+    gateway: "active",
+    runtime: "vercel-edge",
     timestamp: new Date().toISOString(),
-    env_check: !!process.env.INFLUX_URL
+    env_configured: !!process.env.INFLUX_URL
   }), {
     status: 200,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Cache-Control': 'no-store, max-age=0'
-    }
+    headers: corsHeaders
   });
 }

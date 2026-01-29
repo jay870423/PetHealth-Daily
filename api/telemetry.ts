@@ -29,7 +29,7 @@ export default async function handler(req: Request) {
     if (!influxUrl) {
       return new Response(JSON.stringify({ 
         error: "Configuration Error", 
-        message: "环境变量 INFLUX_URL 未配置。请在 Vercel Settings -> Environment Variables 中添加。" 
+        message: "环境变量 INFLUX_URL 未配置。请在 Vercel -> Settings -> Environment Variables 中添加。" 
       }), { status: 500, headers: corsHeaders });
     }
 
@@ -42,21 +42,26 @@ export default async function handler(req: Request) {
     
     const endpoint = `${influxUrl}/query?${queryParams.toString()}`;
 
+    // 设置请求超时，防止 Edge Function 运行超时
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
     const response = await fetch(endpoint, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
         ...(influxToken ? { 'Authorization': `Token ${influxToken}` } : {}),
-      }
-    });
+      },
+      signal: controller.signal
+    }).finally(() => clearTimeout(timeoutId));
 
     if (!response.ok) {
       const errorText = await response.text();
       return new Response(JSON.stringify({
-        error: "InfluxDB Query Failed",
+        error: "InfluxDB Request Failed",
         status: response.status,
-        message: errorText || "数据库连接失败"
-      }), { status: response.status, headers: corsHeaders });
+        message: `数据库查询异常: ${errorText.substring(0, 100)}`
+      }), { status: 502, headers: corsHeaders });
     }
 
     const data = await response.json();
@@ -65,7 +70,7 @@ export default async function handler(req: Request) {
     if (!series || !series.values || series.values.length === 0) {
       return new Response(JSON.stringify({ 
         _empty: true, 
-        message: `设备 ${petId} 当前无在线数据，已自动切换至模拟演示模式。` 
+        message: `ID为 ${petId} 的设备当前无在线上报数据。` 
       }), { status: 200, headers: corsHeaders });
     }
 
@@ -120,9 +125,10 @@ export default async function handler(req: Request) {
     return new Response(JSON.stringify(report), { status: 200, headers: corsHeaders });
 
   } catch (error: any) {
+    const isTimeout = error.name === 'AbortError';
     return new Response(JSON.stringify({ 
-      error: "Edge Function Runtime Error", 
-      message: error.message 
+      error: "Edge Logic Exception", 
+      message: isTimeout ? "与 InfluxDB 建立连接超时，请确认数据库公网地址可达性。" : error.message 
     }), { status: 500, headers: corsHeaders });
   }
 }
