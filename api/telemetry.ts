@@ -20,14 +20,27 @@ export default async function handler(req: Request) {
     const url = new URL(req.url);
     const petId = url.searchParams.get('petId') || "221";
 
-    const influxUrl = (process.env.INFLUX_URL || "https://zhouyuaninfo.com.cn/influx").trim().replace(/\/+$/, "");
+    // 环境变量获取，确保去除多余空格和斜杠
+    const influxUrl = (process.env.INFLUX_URL || "").trim().replace(/\/+$/, "");
     const influxDb = (process.env.INFLUX_BUCKET || "pet_health").trim();
     const influxToken = (process.env.INFLUX_TOKEN || "").trim();
 
-    const query = `SELECT * FROM pet_activity WHERE tracker_id = '${petId}' ORDER BY time DESC LIMIT 30`;
-    const endpoint = `${influxUrl}/query?db=${encodeURIComponent(influxDb)}&q=${encodeURIComponent(query)}`;
+    // 如果没有配置 URL，说明环境变量未同步，这通常是部署初期最常见的问题
+    if (!influxUrl) {
+      return new Response(JSON.stringify({ 
+        error: "Configuration Error", 
+        message: "INFLUX_URL 环境参数缺失，请在 Vercel 项目设置中检查配置。" 
+      }), { status: 500, headers: corsHeaders });
+    }
 
-    console.log(`[Telemetry] Connecting to ${endpoint}`);
+    // 构建查询
+    const query = `SELECT * FROM pet_activity WHERE tracker_id = '${petId}' ORDER BY time DESC LIMIT 30`;
+    const queryParams = new URLSearchParams({
+      db: influxDb,
+      q: query
+    });
+    
+    const endpoint = `${influxUrl}/query?${queryParams.toString()}`;
 
     const response = await fetch(endpoint, {
       method: 'GET',
@@ -40,9 +53,9 @@ export default async function handler(req: Request) {
     const responseText = await response.text();
 
     if (!response.ok) {
-      console.error(`[Telemetry] InfluxDB Error: ${response.status}`, responseText);
+      console.error(`[InfluxDB Error] Status: ${response.status}`, responseText);
       return new Response(JSON.stringify({
-        error: "数据库查询失败",
+        error: "Database Query Failed",
         status: response.status,
         message: responseText.slice(0, 500)
       }), { status: response.status, headers: corsHeaders });
@@ -53,14 +66,17 @@ export default async function handler(req: Request) {
       data = JSON.parse(responseText);
     } catch (e) {
       return new Response(JSON.stringify({ 
-        error: "无效的数据库响应", 
-        details: "Expected JSON but got something else." 
+        error: "Invalid DB Response", 
+        message: "数据库返回的不是有效的 JSON 格式。" 
       }), { status: 500, headers: corsHeaders });
     }
 
     const series = data.results?.[0]?.series?.[0];
     if (!series || !series.values || series.values.length === 0) {
-      return new Response(JSON.stringify({ _empty: true, message: `未找到 ID 为 ${petId} 的设备数据` }), { status: 200, headers: corsHeaders });
+      return new Response(JSON.stringify({ 
+        _empty: true, 
+        message: `未找到 ID 为 ${petId} 的设备数据` 
+      }), { status: 200, headers: corsHeaders });
     }
 
     const columns = series.columns;
@@ -113,9 +129,8 @@ export default async function handler(req: Request) {
     return new Response(JSON.stringify(report), { status: 200, headers: corsHeaders });
 
   } catch (error: any) {
-    console.error(`[Telemetry] Runtime Exception:`, error);
     return new Response(JSON.stringify({ 
-      error: "Edge Function Runtime Error", 
+      error: "Edge Function Error", 
       message: error.message 
     }), { status: 500, headers: corsHeaders });
   }
