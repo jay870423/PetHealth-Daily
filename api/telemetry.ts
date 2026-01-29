@@ -20,20 +20,20 @@ export default async function handler(req: Request) {
     const url = new URL(req.url);
     const petId = url.searchParams.get('petId') || "221";
 
-    // 环境变量获取，确保去除多余空格和斜杠
-    const influxUrl = (process.env.INFLUX_URL || "").trim().replace(/\/+$/, "");
+    // 环境变量校验与清洗
+    const rawInfluxUrl = process.env.INFLUX_URL || "";
+    const influxUrl = rawInfluxUrl.trim().replace(/\/+$/, "");
     const influxDb = (process.env.INFLUX_BUCKET || "pet_health").trim();
     const influxToken = (process.env.INFLUX_TOKEN || "").trim();
 
-    // 如果没有配置 URL，说明环境变量未同步，这通常是部署初期最常见的问题
     if (!influxUrl) {
       return new Response(JSON.stringify({ 
         error: "Configuration Error", 
-        message: "INFLUX_URL 环境参数缺失，请在 Vercel 项目设置中检查配置。" 
+        message: "环境变量 INFLUX_URL 未配置。请在 Vercel Settings -> Environment Variables 中添加。" 
       }), { status: 500, headers: corsHeaders });
     }
 
-    // 构建查询
+    // 构建查询语句
     const query = `SELECT * FROM pet_activity WHERE tracker_id = '${petId}' ORDER BY time DESC LIMIT 30`;
     const queryParams = new URLSearchParams({
       db: influxDb,
@@ -50,32 +50,22 @@ export default async function handler(req: Request) {
       }
     });
 
-    const responseText = await response.text();
-
     if (!response.ok) {
-      console.error(`[InfluxDB Error] Status: ${response.status}`, responseText);
+      const errorText = await response.text();
       return new Response(JSON.stringify({
-        error: "Database Query Failed",
+        error: "InfluxDB Query Failed",
         status: response.status,
-        message: responseText.slice(0, 500)
+        message: errorText || "数据库连接失败"
       }), { status: response.status, headers: corsHeaders });
     }
 
-    let data;
-    try {
-      data = JSON.parse(responseText);
-    } catch (e) {
-      return new Response(JSON.stringify({ 
-        error: "Invalid DB Response", 
-        message: "数据库返回的不是有效的 JSON 格式。" 
-      }), { status: 500, headers: corsHeaders });
-    }
-
+    const data = await response.json();
     const series = data.results?.[0]?.series?.[0];
+
     if (!series || !series.values || series.values.length === 0) {
       return new Response(JSON.stringify({ 
         _empty: true, 
-        message: `未找到 ID 为 ${petId} 的设备数据` 
+        message: `设备 ${petId} 当前无在线数据，已自动切换至模拟演示模式。` 
       }), { status: 200, headers: corsHeaders });
     }
 
@@ -86,6 +76,7 @@ export default async function handler(req: Request) {
       return idx !== -1 ? row[idx] : null;
     };
 
+    // 坐标序列解析
     const coordinates: [number, number][] = series.values
       .map((v: any[]) => [
         parseFloat(getVal(v, 'lat') || 0), 
@@ -130,7 +121,7 @@ export default async function handler(req: Request) {
 
   } catch (error: any) {
     return new Response(JSON.stringify({ 
-      error: "Edge Function Error", 
+      error: "Edge Function Runtime Error", 
       message: error.message 
     }), { status: 500, headers: corsHeaders });
   }
