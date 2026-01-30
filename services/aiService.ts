@@ -1,7 +1,12 @@
 
 import { DailyReport, AiProvider } from "../types";
 
-export const generatePetSummary = async (report: DailyReport, provider: AiProvider = 'gemini'): Promise<string> => {
+export interface AIAnalysisResult {
+  summary: string;
+  advice: string[];
+}
+
+export const generatePetSummary = async (report: DailyReport, provider: AiProvider = 'gemini'): Promise<AIAnalysisResult> => {
   try {
     const response = await fetch('/api/analyze', {
       method: 'POST',
@@ -11,24 +16,23 @@ export const generatePetSummary = async (report: DailyReport, provider: AiProvid
       body: JSON.stringify({ report, provider }),
     });
 
-    const contentType = response.headers.get("content-type");
-    if (!response.ok) {
-      if (contentType && contentType.includes("application/json")) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP ${response.status}`);
-      }
-      throw new Error(`网络请求失败: ${response.status}`);
-    }
-
-    if (!contentType || !contentType.includes("application/json")) {
-      throw new Error("服务器返回了非 JSON 格式的响应");
-    }
-
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    return data.text || "日报分析完成，体征状态正常。";
+    
+    // 如果返回的是嵌套在 text 里的 JSON 字符串（针对某些代理转发情况）
+    if (typeof data.text === 'string' && data.text.startsWith('{')) {
+      return JSON.parse(data.text);
+    }
+
+    return {
+      summary: data.summary || "日报分析完成，体征状态正常。",
+      advice: data.advice || ["继续保持规律的户外活动"]
+    };
   } catch (error: any) {
     console.error(`AI 分析服务 (${provider}) 异常:`, error.message);
-    const isHighActivity = report.activity.steps > 8000;
-    return `[实时同步中] ${isHighActivity ? '今天运动量满分，我是最棒的！' : '今天稍微偷了点懒，但感觉很舒适。'} 🐾 (错误: ${error.message.substring(0, 20)}...)`;
+    return {
+      summary: `[离线分析] 今天的步数是 ${report.activity.steps}，感觉状态很稳！`,
+      advice: ["检查设备佩戴位置是否正确", "根据今日活动量合理喂食"]
+    };
   }
 };

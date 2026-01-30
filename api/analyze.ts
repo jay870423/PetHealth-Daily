@@ -1,5 +1,5 @@
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 
 export const config = {
   runtime: 'edge',
@@ -13,7 +13,6 @@ export default async function handler(req: Request) {
     'Content-Type': 'application/json; charset=utf-8',
   };
 
-  // 处理预检请求
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
@@ -28,99 +27,99 @@ export default async function handler(req: Request) {
     const isDog = report.speciesId === 1;
     const speciesName = isDog ? "小狗" : "小猫";
     const soundEffect = isDog ? "汪汪！" : "喵呜~";
-    const characterTrait = isDog ? "忠诚且充满活力" : "优雅而略显慵懒";
+    const characterTrait = isDog ? "活泼且忠诚" : "优雅而内敛";
 
-    const systemPrompt = `你是一位精通宠物行为学的健康专家。
-请以一只【${characterTrait}】的【${speciesName}】的口吻，根据当日健康数据生成一段简短的健康日报摘要。
-要求：
-1. 使用第一人称，性格鲜明。
-2. 步数达标要自豪，体温异常要委屈提醒。
-3. 如果电量低于3.65V，提醒“能量快空了”。
-4. 结尾必须使用：${soundEffect}。
-5. 字数控制在80字以内，仅输出正文内容，不要包含任何前导词。`;
+    const systemInstruction = `你是一位精通宠物行为学和临床兽医学的资深专家。
+请根据提供的宠物健康监测数据，生成以下内容：
+1. [summary]: 以一只【${characterTrait}】的【${speciesName}】的口吻，描述自己今天的感受（第一人称）。
+2. [advice]: 给出2-3条非常具体、具备专业性的针对性建议（例如：调整喂食量、特定类型的互动、环境温度建议等）。
 
-    const userPrompt = `今日健康数据：步数 ${report.activity.steps}，目标达成率 ${(report.activity.completionRate * 100).toFixed(1)}%，平均体温 ${report.vitals.avgTemp}°C，设备电压 ${report.device.battery}V。`;
+数据背景：
+- 步数：${report.activity.steps}步（目标10000）
+- 体温：${report.vitals.avgTemp}°C
+- 趋势：较昨日${report.trend.vsYesterday > 0 ? '上升' : '下降'}${Math.abs(report.trend.vsYesterday * 100)}%
 
-    // --- Provider: Gemini ---
+约束：
+- summary 控制在60字内，带语气词，结尾是：${soundEffect}。
+- advice 每条20字左右，强调科学性。
+- 必须且仅输出一个合法的 JSON 对象，格式为: {"summary": "string", "advice": ["string", "string"]}。`;
+
+    // --- 1. Gemini Implementation ---
     if (provider === 'gemini') {
       const apiKey = process.env.API_KEY;
-      if (!apiKey) {
-        return new Response(JSON.stringify({ error: "Gemini API_KEY 未在环境变量中配置" }), { status: 500, headers: corsHeaders });
-      }
-
       const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: [{ parts: [{ text: userPrompt }] }],
+        contents: [{ parts: [{ text: "生成分析报告" }] }],
         config: { 
-          systemInstruction: systemPrompt, 
-          temperature: 0.8,
-          topP: 0.95,
-          topK: 40
+          systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              summary: { type: Type.STRING },
+              advice: { type: Type.ARRAY, items: { type: Type.STRING } }
+            },
+            required: ["summary", "advice"]
+          }
         }
       });
-
-      const text = response.text || "体征数据已同步，我今天感觉棒极了！";
-      return new Response(JSON.stringify({ text }), { status: 200, headers: corsHeaders });
+      return new Response(response.text, { status: 200, headers: corsHeaders });
     }
 
-    // --- Provider: DeepSeek ---
+    // --- 2. DeepSeek / Qwen Implementation (OpenAI Compatible) ---
+    let apiUrl = "";
+    let apiKey = "";
+    let modelName = "";
+
     if (provider === 'deepseek') {
-      const apiKey = process.env.DEEPSEEK_API_KEY;
-      if (!apiKey) throw new Error("DEEPSEEK_API_KEY 未配置");
-      const res = await fetch('https://api.deepseek.com/chat/completions', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json', 
-          'Authorization': `Bearer ${apiKey}` 
-        },
-        body: JSON.stringify({
-          model: "deepseek-chat",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt }
-          ],
-          max_tokens: 150
-        })
-      });
-      const data = await res.json();
-      const text = data.choices?.[0]?.message?.content || "DeepSeek 正在思考中...";
-      return new Response(JSON.stringify({ text }), { status: 200, headers: corsHeaders });
+      apiUrl = "https://api.deepseek.com/chat/completions";
+      apiKey = process.env.DEEPSEEK_API_KEY || "";
+      modelName = "deepseek-chat";
+    } else if (provider === 'qwen') {
+      apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+      apiKey = process.env.QWEN_API_KEY || "";
+      modelName = "qwen-plus";
     }
 
-    // --- Provider: Qwen (DashScope) ---
-    if (provider === 'qwen') {
-      const apiKey = process.env.QWEN_API_KEY;
-      if (!apiKey) throw new Error("QWEN_API_KEY 未配置");
-      const res = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json', 
-          'Authorization': `Bearer ${apiKey}` 
-        },
-        body: JSON.stringify({
-          model: "qwen-plus",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt }
-          ]
-        })
-      });
-      const data = await res.json();
-      const text = data.choices?.[0]?.message?.content || "通义千问正在同步我的心情...";
-      return new Response(JSON.stringify({ text }), { status: 200, headers: corsHeaders });
+    if (!apiKey) {
+      throw new Error(`API Key for ${provider} is not configured`);
     }
 
-    throw new Error("无效的模型提供商选择");
+    const aiResponse = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: modelName,
+        messages: [
+          { role: "system", content: systemInstruction },
+          { role: "user", content: "请根据最新的日报数据输出 JSON 结果。" }
+        ],
+        response_format: { type: "json_object" }
+      })
+    });
+
+    const aiData = await aiResponse.json();
+    const content = aiData.choices?.[0]?.message?.content;
+
+    // 尝试解析，防止模型输出包含 Markdown 代码块
+    let result = content;
+    if (content.includes("```json")) {
+      result = content.split("```json")[1].split("```")[0].trim();
+    } else if (content.includes("```")) {
+      result = content.split("```")[1].split("```")[0].trim();
+    }
+
+    return new Response(result, { status: 200, headers: corsHeaders });
 
   } catch (error: any) {
-    console.error("AI Analysis Edge Error:", error);
+    console.error("AI Analysis Error:", error);
     return new Response(JSON.stringify({ 
-      error: "AI 服务暂时不可用", 
-      details: error.message 
-    }), {
-      status: 500,
-      headers: corsHeaders
-    });
+      summary: "AI 暂时断开连接，我正在梳理毛发...", 
+      advice: ["检查网络连接", "请稍后重试模型分析"] 
+    }), { status: 500, headers: corsHeaders });
   }
 }
