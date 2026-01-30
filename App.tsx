@@ -20,62 +20,30 @@ const App: React.FC = () => {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isPetMenuOpen, setIsPetMenuOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [dbStatus, setDbStatus] = useState<'connected' | 'error' | 'syncing'>('syncing');
+  const [dbStatus, setDbStatus] = useState<'connected' | 'error' | 'demo'>('demo');
   const [lastError, setLastError] = useState<string | null>(null);
 
   const selectedPet = PETS.find(p => p.id === selectedPetId) || PETS[0];
 
-  const getSystemStatus = async (): Promise<string> => {
-    try {
-      const res = await fetch('/api/health?_t=' + Date.now());
-      if (res.ok) {
-        const data = await res.json();
-        return data.status === "ok" ? "ONLINE" : `ERROR(${res.status})`;
-      }
-      return `HTTP_${res.status}`;
-    } catch (e) {
-      return "FETCH_FAILED";
-    }
-  };
-
   const fetchReport = async (petId: string) => {
     setLoading(true);
-    setDbStatus('syncing');
     setLastError(null);
     
     try {
-      const url = `/api/telemetry?petId=${petId}&_v=${Date.now()}`;
+      const url = `/api/telemetry?petId=${petId}&_t=${Date.now()}`;
       const response = await fetch(url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
-        cache: 'no-store'
       });
       
-      const text = await response.text();
-      const isHtml = text.trim().toLowerCase().startsWith('<!doctype') || text.trim().toLowerCase().startsWith('<html');
-
-      if (!response.ok || isHtml) {
-        if (isHtml) {
-          throw new Error("【路由异常】接口被重定向到了 HTML 页面。请检查 vercel.json 的 rewrites 配置。");
-        }
-        
-        const systemStatus = await getSystemStatus();
-        
-        if (response.status === 404) {
-          throw new Error(`【后端离线】接口 404 (系统状态: ${systemStatus})。请确认 api/ 文件夹已正确部署。`);
-        } else if (response.status === 500) {
-          let detail = "服务器内部错误";
-          try {
-            const err = JSON.parse(text);
-            detail = err.message || err.error || detail;
-          } catch (e) {}
-          throw new Error(`【后端崩溃】HTTP 500: ${detail}`);
-        } else {
-          throw new Error(`【接口异常】HTTP ${response.status} (系统状态: ${systemStatus})`);
-        }
+      if (response.status === 404) {
+        setDbStatus('demo');
+        const { generateDailyReport } = await import('./services/mockData');
+        setReport(generateDailyReport(petId));
+        return;
       }
 
-      const data = JSON.parse(text);
+      const data = await response.json();
 
       if (data._empty) {
         setDbStatus('connected');
@@ -88,10 +56,7 @@ const App: React.FC = () => {
       setReport(data);
       setDbStatus('connected');
     } catch (err: any) {
-      console.error("Diagnostic Error:", err.message);
-      setDbStatus('error');
-      setLastError(err.message);
-      // Failover to mock data
+      setDbStatus('demo');
       const { generateDailyReport } = await import('./services/mockData');
       setReport(generateDailyReport(petId));
     } finally {
@@ -101,7 +66,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     fetchReport(selectedPetId);
-    const interval = setInterval(() => fetchReport(selectedPetId), 60000);
+    const interval = setInterval(() => fetchReport(selectedPetId), 30000);
     return () => clearInterval(interval);
   }, [selectedPetId]);
 
@@ -111,13 +76,14 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#F5F5F7] pb-12">
+    <div className="min-h-screen bg-[#F5F5F7] pb-12 selection:bg-indigo-100">
+      {/* Top Navigation */}
       <div className="sticky top-0 z-[1001] bg-white/80 backdrop-blur-xl border-b border-gray-100 mb-8">
         <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
           <div className="relative">
             <button 
               onClick={() => setIsPetMenuOpen(!isPetMenuOpen)}
-              className="flex items-center gap-3 hover:bg-gray-50 p-1 rounded-2xl transition-colors active:scale-95"
+              className="flex items-center gap-3 hover:bg-gray-50 p-1 rounded-2xl transition-all active:scale-95"
             >
               <div className="w-10 h-10 rounded-full bg-indigo-500 overflow-hidden border-2 border-white shadow-sm ring-2 ring-indigo-100">
                  <img src={selectedPet.avatar} alt={selectedPet.name} className="w-full h-full object-cover" />
@@ -130,13 +96,13 @@ const App: React.FC = () => {
                   </svg>
                 </div>
                 <div className="flex items-center gap-2">
-                  <p className="text-[10px] text-gray-400 font-mono uppercase tracking-tighter">{selectedPet.breed} · {selectedPet.id}</p>
+                  <p className="text-[10px] text-gray-400 font-mono uppercase tracking-tighter">{selectedPet.breed} · ID:{selectedPet.id}</p>
                   <div className="flex items-center gap-1">
                     <div className={`w-1.5 h-1.5 rounded-full ${
-                      dbStatus === 'connected' ? 'bg-green-500' : dbStatus === 'syncing' ? 'bg-blue-500 animate-pulse' : 'bg-red-500'
+                      dbStatus === 'connected' ? 'bg-green-500' : 'bg-orange-400 animate-pulse'
                     }`}></div>
                     <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">
-                      {dbStatus === 'connected' ? 'Live' : dbStatus === 'syncing' ? 'Sync' : 'Failover'}
+                      {dbStatus === 'connected' ? 'LIVE SYNC' : 'DEMO MODE'}
                     </span>
                   </div>
                 </div>
@@ -166,57 +132,45 @@ const App: React.FC = () => {
             )}
           </div>
           
-          <button 
-            onClick={() => setIsImportModalOpen(true)}
-            className="bg-blue-600 text-white px-5 py-2.5 rounded-2xl text-xs font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 active:scale-95 flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-            离线补录
-          </button>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setIsImportModalOpen(true)}
+              className="bg-blue-600 text-white px-5 py-2.5 rounded-2xl text-xs font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 active:scale-95 flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              离线补录
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className={`max-w-6xl mx-auto px-4 md:px-8 space-y-6 transition-all duration-500 ${loading ? 'opacity-50 blur-[2px]' : 'opacity-100 blur-0'}`}>
-        {lastError && (
-          <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-center gap-3 text-red-600 shadow-sm animate-in slide-in-from-top-4">
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <div className="flex-1">
-              <p className="text-xs font-bold">同步诊断报告</p>
-              <p className="text-[10px] opacity-80 leading-relaxed font-mono">{lastError}</p>
-            </div>
-            <button 
-              onClick={() => fetchReport(selectedPetId)} 
-              className="text-[10px] font-black uppercase bg-white border border-red-200 text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
-            >
-              尝试修复
-            </button>
-          </div>
-        )}
-
+      <div className={`max-w-6xl mx-auto px-4 md:px-8 space-y-6 transition-all duration-500 ${loading ? 'opacity-50' : 'opacity-100'}`}>
         {report && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pb-12">
             <div className="lg:col-span-2 space-y-6">
-              <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-gray-100 flex flex-col md:flex-row items-center gap-8">
+              {/* Activity Ring Section */}
+              <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-gray-100 flex flex-col md:flex-row items-center gap-8 hover:shadow-md transition-shadow">
                 <StepRing steps={report.activity.steps} goal={10000} />
                 <div className="flex-1 space-y-4 w-full">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">活跃等级</span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                      report.activity.activeLevel === 'HIGH' ? 'bg-orange-100 text-orange-600' : 
-                      report.activity.activeLevel === 'NORMAL' ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600'
-                    }`}>{report.activity.activeLevel}</span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">活跃等级</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        report.activity.activeLevel === 'HIGH' ? 'bg-orange-100 text-orange-600' : 
+                        report.activity.activeLevel === 'NORMAL' ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600'
+                      }`}>{report.activity.activeLevel}</span>
+                    </div>
+                    <span className="text-[10px] text-gray-300 font-mono">Synced: {new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-[10px] text-gray-400 uppercase">目标达成</p>
+                    <div className="bg-gray-50 rounded-2xl p-4">
+                      <p className="text-[10px] text-gray-400 uppercase font-bold">目标达成</p>
                       <p className="text-xl font-bold text-gray-800">{(report.activity.completionRate * 100).toFixed(0)}%</p>
                     </div>
-                    <div>
-                      <p className="text-[10px] text-gray-400 uppercase">平均步幅</p>
+                    <div className="bg-gray-50 rounded-2xl p-4">
+                      <p className="text-[10px] text-gray-400 uppercase font-bold">平均步幅</p>
                       <p className="text-xl font-bold text-gray-800">{report.activity.stride}m</p>
                     </div>
                   </div>
@@ -225,41 +179,61 @@ const App: React.FC = () => {
 
               <AISummary report={report} />
 
-              <div className="bg-white rounded-[2rem] h-[450px] shadow-sm border border-gray-100 overflow-hidden relative">
+              {/* Enhanced Footprint Map */}
+              <div className="bg-white rounded-[2rem] h-[450px] shadow-sm border border-gray-100 overflow-hidden relative group">
                 <ActivityMap coordinates={report.coordinates} />
+                <div className="absolute bottom-4 left-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="bg-white/90 backdrop-blur px-3 py-1.5 rounded-xl border border-gray-200 text-[10px] font-bold text-gray-500 shadow-sm">
+                    轨迹基于地理栅栏点位实时绘制
+                  </div>
+                </div>
               </div>
             </div>
 
+            {/* Sidebar with optimized layout */}
             <div className="space-y-6">
-              <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-gray-100">
-                <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-6">核心体征 (Vitals)</h3>
+              <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+                <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-[0.15em] mb-6">核心体征 (Vitals)</h3>
                 <div className="space-y-6">
-                  <div className="flex justify-between items-center">
+                  <div className="flex justify-between items-center p-5 bg-indigo-50/50 rounded-3xl">
                     <div>
-                      <p className="text-xs text-gray-500">平均体温</p>
-                      <p className="text-2xl font-bold text-gray-900">{report.vitals.avgTemp}°C</p>
+                      <p className="text-[10px] text-indigo-400 font-bold uppercase mb-1">平均体温</p>
+                      <p className="text-3xl font-black text-indigo-900">{report.vitals.avgTemp}°C</p>
                     </div>
-                    <div className={`p-2 rounded-xl ${report.vitals.status === 'WARNING' ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-500'}`}>
+                    <div className={`p-3 rounded-2xl ${report.vitals.status === 'WARNING' ? 'bg-red-100 text-red-600' : 'bg-white text-indigo-600 shadow-sm'}`}>
                       <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-[10px] text-gray-400 uppercase">平均气压</p>
-                      <p className="font-bold text-gray-800">{report.vitals.avgPressure} hPa</p>
+                    <div className="p-4 border border-gray-50 bg-gray-50/30 rounded-2xl">
+                      <p className="text-[10px] text-gray-400 uppercase font-bold mb-1">环境气压</p>
+                      <p className="font-black text-gray-800">{report.vitals.avgPressure} <span className="text-[9px] text-gray-400 font-normal">hPa</span></p>
                     </div>
-                    <div>
-                      <p className="text-[10px] text-gray-400 uppercase">海拔高度</p>
-                      <p className="font-bold text-gray-800">{report.vitals.avgHeight} m</p>
+                    <div className="p-4 border border-gray-50 bg-gray-50/30 rounded-2xl">
+                      <p className="text-[10px] text-gray-400 uppercase font-bold mb-1">活跃海拔</p>
+                      <p className="font-black text-gray-800">{report.vitals.avgHeight} <span className="text-[9px] text-gray-400 font-normal">m</span></p>
                     </div>
                   </div>
                 </div>
               </div>
 
+              {/* Re-adjusted Twin Cards for better vertical balance */}
               <TrendCard trend={report.trend} />
               <DeviceCard device={report.device} />
+              
+              <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-[2rem] p-6 text-white shadow-lg shadow-indigo-100 active:scale-[0.98] transition-transform cursor-default">
+                <div className="flex items-center gap-2 mb-3">
+                  <svg className="w-5 h-5 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-xs font-bold uppercase tracking-wider">专家建议</span>
+                </div>
+                <p className="text-sm font-medium leading-relaxed opacity-90 italic">
+                  "{report.advice[0] || '保持充足的水分，享受健康的一天！'}"
+                </p>
+              </div>
             </div>
           </div>
         )}

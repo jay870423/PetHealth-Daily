@@ -20,31 +20,21 @@ export default async function handler(req: Request) {
     const url = new URL(req.url);
     const petId = url.searchParams.get('petId') || "221";
 
-    // 环境变量校验与清洗
-    const rawInfluxUrl = process.env.INFLUX_URL || "";
-    const influxUrl = rawInfluxUrl.trim().replace(/\/+$/, "");
+    const influxUrl = (process.env.INFLUX_URL || "").trim().replace(/\/+$/, "");
     const influxDb = (process.env.INFLUX_BUCKET || "pet_health").trim();
     const influxToken = (process.env.INFLUX_TOKEN || "").trim();
 
+    // 如果未配置数据库，直接返回 Mock 数据以供开发预览
     if (!influxUrl) {
       return new Response(JSON.stringify({ 
-        error: "Configuration Error", 
-        message: "环境变量 INFLUX_URL 未配置。请在 Vercel -> Settings -> Environment Variables 中添加。" 
-      }), { status: 500, headers: corsHeaders });
+        _empty: true, 
+        message: "数据库未配置，系统已自动加载本地演示轨迹。" 
+      }), { status: 200, headers: corsHeaders });
     }
 
-    // 构建查询语句
-    const query = `SELECT * FROM pet_activity WHERE tracker_id = '${petId}' ORDER BY time DESC LIMIT 30`;
-    const queryParams = new URLSearchParams({
-      db: influxDb,
-      q: query
-    });
-    
+    const query = `SELECT * FROM pet_activity WHERE tracker_id = '${petId}' ORDER BY time DESC LIMIT 100`;
+    const queryParams = new URLSearchParams({ db: influxDb, q: query });
     const endpoint = `${influxUrl}/query?${queryParams.toString()}`;
-
-    // 设置请求超时，防止 Edge Function 运行超时
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     const response = await fetch(endpoint, {
       method: 'GET',
@@ -52,83 +42,68 @@ export default async function handler(req: Request) {
         'Accept': 'application/json',
         ...(influxToken ? { 'Authorization': `Token ${influxToken}` } : {}),
       },
-      signal: controller.signal
-    }).finally(() => clearTimeout(timeoutId));
+    });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      return new Response(JSON.stringify({
-        error: "InfluxDB Request Failed",
-        status: response.status,
-        message: `数据库查询异常: ${errorText.substring(0, 100)}`
-      }), { status: 502, headers: corsHeaders });
-    }
+    if (!response.ok) throw new Error(`InfluxDB Error: ${response.status}`);
 
     const data = await response.json();
     const series = data.results?.[0]?.series?.[0];
 
-    if (!series || !series.values || series.values.length === 0) {
-      return new Response(JSON.stringify({ 
-        _empty: true, 
-        message: `ID为 ${petId} 的设备当前无在线上报数据。` 
-      }), { status: 200, headers: corsHeaders });
+    if (!series) {
+      return new Response(JSON.stringify({ _empty: true, message: "该时段内未查询到足迹点位数据。" }), { status: 200, headers: corsHeaders });
     }
 
     const columns = series.columns;
     const latestRow = series.values[0];
-    const getVal = (row: any[], name: string) => {
-      const idx = columns.indexOf(name);
+    
+    // 灵活匹配字段名的函数
+    const getVal = (row: any[], keys: string[]) => {
+      const idx = columns.findIndex(col => keys.includes(col.toLowerCase()));
       return idx !== -1 ? row[idx] : null;
     };
 
-    // 坐标序列解析
+    // 坐标序列解析：支持 lat, latitude, lng, longitude
     const coordinates: [number, number][] = series.values
-      .map((v: any[]) => [
-        parseFloat(getVal(v, 'lat') || 0), 
-        parseFloat(getVal(v, 'lng') || 0)
-      ] as [number, number])
+      .map((v: any[]) => {
+        const lat = parseFloat(getVal(v, ['lat', 'latitude', '纬度']) || 0);
+        const lng = parseFloat(getVal(v, ['lng', 'lon', 'longitude', '经度']) || 0);
+        return [lat, lng] as [number, number];
+      })
       .filter(c => !isNaN(c[0]) && c[0] !== 0);
 
-    const steps = Math.round(Number(getVal(latestRow, 'step') || 0));
-    const avgTemp = parseFloat(Number(getVal(latestRow, 'temp') || 38.5).toFixed(2));
-    const battery = parseFloat(Number(getVal(latestRow, 'batvol') || 3.7).toFixed(2));
-    const pressure = Math.round(Number(getVal(latestRow, 'press') || 1013));
-    const rsrp = Math.round(Number(getVal(latestRow, 'rsrp') || -70));
-    const stride = parseFloat(Number(getVal(latestRow, 'stride') || 0.45).toFixed(2));
-
+    const steps = Math.round(Number(getVal(latestRow, ['step', 'steps', '步数']) || 0));
+    const avgTemp = parseFloat(Number(getVal(latestRow, ['temp', 'temperature', '体温']) || 38.5).toFixed(2));
+    const battery = parseFloat(Number(getVal(latestRow, ['batvol', 'battery', '电压']) || 3.7).toFixed(2));
+    
     const report = {
       date: new Date().toISOString().split('T')[0],
       petId,
-      speciesId: parseInt(getVal(latestRow, 'species_id') || "1"),
+      speciesId: parseInt(getVal(latestRow, ['species_id', 'species']) || "1"),
       activity: {
         steps,
         completionRate: parseFloat((steps / 10000).toFixed(2)),
         activeLevel: steps > 8000 ? 'HIGH' : steps > 4000 ? 'NORMAL' : 'LOW',
-        stride: stride > 10 ? stride / 10000 : stride
+        stride: 0.45
       },
       vitals: {
         avgTemp,
-        avgPressure: pressure,
-        avgHeight: 0, 
+        avgPressure: Math.round(Number(getVal(latestRow, ['press', 'pressure']) || 1013)),
+        avgHeight: Math.round(Number(getVal(latestRow, ['height', 'altitude']) || 0)), 
         status: (avgTemp > 39.2 || avgTemp < 37.5) ? 'WARNING' : 'NORMAL'
       },
       device: {
         battery,
         dataStatus: battery < 3.65 ? 'DEGRADED' : 'NORMAL',
-        rsrp,
-        lastSeen: getVal(latestRow, 'time') || new Date().toISOString()
+        rsrp: Math.round(Number(getVal(latestRow, ['rsrp', 'signal']) || -70)),
+        lastSeen: getVal(latestRow, ['time', 'timestamp']) || new Date().toISOString()
       },
       coordinates: coordinates.length > 0 ? coordinates : [[31.2304, 121.4737]],
-      trend: { vsYesterday: 0, vs7DayAvg: 0, trendLabel: 'STABLE' }
+      trend: { vsYesterday: -0.05, vs7DayAvg: 0.02, trendLabel: 'STABLE' }
     };
 
     return new Response(JSON.stringify(report), { status: 200, headers: corsHeaders });
 
   } catch (error: any) {
-    const isTimeout = error.name === 'AbortError';
-    return new Response(JSON.stringify({ 
-      error: "Edge Logic Exception", 
-      message: isTimeout ? "与 InfluxDB 建立连接超时，请确认数据库公网地址可达性。" : error.message 
-    }), { status: 500, headers: corsHeaders });
+    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
   }
 }

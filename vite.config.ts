@@ -8,8 +8,14 @@ export default defineConfig({
     outDir: 'dist',
   },
   server: {
-    port: 3000,
-    // 在 Vercel 开发模式下，Vercel CLI 会自动处理 /api 路由，无需手动配置代理。
-    // 手动代理到 3000 端口会触发递归循环，导致 "string did not match pattern" 或 404 错误。
-  }
+    port: 3001, // 修改前端开发端口，避免与 server.mjs (3000) 冲突
+    proxy: {
+      // 将 /api 请求转发到本地后端服务或 Mock 环境
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
 });
