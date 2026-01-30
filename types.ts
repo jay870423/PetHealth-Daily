@@ -12,13 +12,14 @@ export interface ActivityStats {
   steps: number;
   completionRate: number;
   activeLevel: 'LOW' | 'NORMAL' | 'HIGH';
-  stride: number;
+  // stride is used to track the movement characteristics of different pets
+  stride?: number;
 }
 
 export interface VitalStats {
   avgTemp: number;
-  avgPressure: number;
-  avgHeight: number;
+  avgPressure?: number;
+  avgHeight?: number;
   status: 'NORMAL' | 'WARNING';
 }
 
@@ -38,7 +39,6 @@ export interface DeviceStats {
 export interface DailyReport {
   date: string;
   petId: string;
-  speciesId: number; 
   summary: string;
   activity: ActivityStats;
   vitals: VitalStats;
@@ -46,4 +46,5 @@ export interface DailyReport {
   device: DeviceStats;
   advice: string[];
   coordinates: [number, number][];
+  speciesId?: number;
 }
